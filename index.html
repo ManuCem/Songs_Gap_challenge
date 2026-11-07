@@ -1,0 +1,603 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lyrics Gap Challenge</title>
+<style>
+  :root{
+    --bg1:#0b0a1a; --bg2:#1a1038; --card:rgba(255,255,255,.06); --card-b:rgba(255,255,255,.12);
+    --text:#f1f0fa; --muted:#a7a3c4; --a1:#ff4fa3; --a2:#7a6cff; --a3:#38d9ff;
+    --ok:#38e08c; --bad:#ff5f78; --reveal:#ffbf47;
+    --grad:linear-gradient(135deg,var(--a1),var(--a2));
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0;color:var(--text);font-family:"Inter",system-ui,-apple-system,Segoe UI,Roboto,sans-serif;line-height:1.55;
+    background:radial-gradient(900px 500px at 10% -10%,rgba(255,79,163,.22),transparent 60%),
+               radial-gradient(900px 600px at 100% 0%,rgba(122,108,255,.28),transparent 60%),
+               linear-gradient(180deg,var(--bg1),var(--bg2));
+    background-attachment:fixed;min-height:100vh;
+  }
+  .wrap{max-width:880px;margin:0 auto;padding:28px 18px 130px}
+  .hidden{display:none!important}
+
+  /* hero */
+  .hero{text-align:center;padding:18px 0 26px}
+  .eq{display:inline-flex;gap:5px;align-items:flex-end;height:42px;margin-bottom:10px}
+  .eq i{width:7px;border-radius:4px;background:var(--grad);animation:bounce 1s ease-in-out infinite}
+  .eq i:nth-child(1){height:40%;animation-delay:-.9s}
+  .eq i:nth-child(2){height:90%;animation-delay:-.6s}
+  .eq i:nth-child(3){height:60%;animation-delay:-.3s}
+  .eq i:nth-child(4){height:100%;animation-delay:-.75s}
+  .eq i:nth-child(5){height:50%;animation-delay:-.45s}
+  @keyframes bounce{0%,100%{transform:scaleY(.35)}50%{transform:scaleY(1)}}
+  .eq i{transform-origin:bottom}
+  h1{margin:0;font-size:clamp(1.9rem,5vw,2.8rem);letter-spacing:-.02em;line-height:1.1}
+  h1 span{background:linear-gradient(90deg,var(--a1),var(--a3));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .tag{color:var(--muted);margin:10px auto 0;max-width:520px}
+
+  /* steps */
+  .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:0 0 18px}
+  .step{background:var(--card);border:1px solid var(--card-b);border-radius:14px;padding:12px 14px;display:flex;gap:10px;align-items:center;font-size:.9rem}
+  .step b{display:grid;place-items:center;min-width:28px;height:28px;border-radius:50%;background:var(--grad);font-size:.85rem}
+  @media(max-width:620px){.steps{grid-template-columns:1fr}}
+
+  /* promo */
+  .promo{
+    display:flex;align-items:center;gap:16px;flex-wrap:wrap;justify-content:space-between;
+    padding:16px 20px;margin-bottom:18px;border-radius:16px;text-decoration:none;color:var(--text);
+    background:linear-gradient(120deg,rgba(255,79,163,.22),rgba(56,217,255,.16));
+    border:1px solid rgba(255,255,255,.18);transition:transform .15s,box-shadow .15s;
+  }
+  .promo:hover{transform:translateY(-2px);box-shadow:0 10px 30px rgba(122,108,255,.35)}
+  .promo .t{font-weight:700;font-size:1.05rem}
+  .promo .s{color:var(--muted);font-size:.88rem}
+  .promo .go{background:var(--grad);padding:9px 16px;border-radius:999px;font-weight:700;font-size:.9rem;white-space:nowrap}
+
+  /* cards & inputs */
+  .card{background:var(--card);border:1px solid var(--card-b);border-radius:18px;padding:18px;backdrop-filter:blur(10px)}
+  .field{width:100%;background:rgba(0,0,0,.28);color:var(--text);border:1px solid var(--card-b);border-radius:12px;padding:12px 14px;font:inherit;outline:none;transition:border-color .15s, box-shadow .15s}
+  .field:focus{border-color:var(--a2);box-shadow:0 0 0 3px rgba(122,108,255,.25)}
+  #titleInput{margin-bottom:12px}
+  #lyricsInput{min-height:280px;resize:vertical}
+  .row{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px}
+  .hint{color:var(--muted);font-size:.82rem;margin:8px 0 0}
+  .opts{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));margin:16px 0}
+  .opt{background:rgba(0,0,0,.2);border:1px solid var(--card-b);border-radius:14px;padding:14px;font-size:.92rem}
+  .opt label{display:block;cursor:pointer;margin:4px 0}
+  .opt b{color:var(--a3)}
+  input[type=range]{width:100%;accent-color:var(--a1)}
+  input[type=checkbox]{accent-color:var(--a1)}
+
+  button{font:inherit;border:0;border-radius:12px;padding:11px 18px;cursor:pointer;color:var(--text);background:rgba(255,255,255,.1);transition:transform .12s,filter .12s,background .12s}
+  button:hover{background:rgba(255,255,255,.18)}
+  button:active{transform:scale(.97)}
+  button.primary{background:var(--grad);font-weight:700;box-shadow:0 8px 22px rgba(122,108,255,.35)}
+  button.primary:hover{filter:brightness(1.1)}
+  button.big{width:100%;padding:15px;font-size:1.05rem}
+  button:disabled{opacity:.4;cursor:not-allowed}
+
+  /* game */
+  .gameHead{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+  .gameHead h2{margin:0;font-size:1.5rem}
+  .progress{color:var(--muted);font-size:.9rem}
+  .pbar{height:6px;border-radius:99px;background:rgba(255,255,255,.1);overflow:hidden;margin-bottom:14px}
+  .pbar div{height:100%;width:0;background:var(--grad);transition:width .25s}
+  .lyrics{background:var(--card);border:1px solid var(--card-b);border-radius:18px;padding:22px 24px;font-size:1.1rem;line-height:1.5}
+  .line{margin:0;padding:6px 0;border-radius:8px}
+  .line.blank{height:18px;padding:0}
+  .gap{display:inline-block;white-space:nowrap}
+  .gap input{
+    font:inherit;text-align:center;background:rgba(0,0,0,.35);color:var(--text);
+    border:none;border-bottom:2px solid rgba(255,255,255,.35);border-radius:6px 6px 0 0;
+    padding:1px 4px;margin:0 2px;outline:none;transition:all .15s
+  }
+  .gap input::placeholder{color:var(--muted)}
+  .gap input:focus{border-bottom-color:var(--a3);background:rgba(56,217,255,.14);box-shadow:0 4px 14px rgba(56,217,255,.2)}
+  .gap input.ok{border-bottom-color:var(--ok);background:rgba(56,224,140,.16);color:var(--ok);font-weight:700}
+  .gap input.bad{border-bottom-color:var(--bad);background:rgba(255,95,120,.16);color:var(--bad);animation:shake .3s}
+  .gap input.reveal{border-bottom-color:var(--reveal);background:rgba(255,191,71,.16);color:var(--reveal);font-weight:700}
+  @keyframes shake{25%{transform:translateX(-3px)}75%{transform:translateX(3px)}}
+
+  /* tabs */
+  .tabs{display:flex;gap:6px;margin:0 0 12px;padding:5px;background:rgba(0,0,0,.25);border:1px solid var(--card-b);border-radius:14px;width:fit-content}
+  .tab{background:transparent;padding:9px 20px;border-radius:10px;font-weight:600;color:var(--muted)}
+  .tab:hover{background:rgba(255,255,255,.08);color:var(--text)}
+  .tab.active{background:var(--grad);color:var(--text);box-shadow:0 6px 18px rgba(122,108,255,.35)}
+  .sol{display:inline-block;padding:0 6px;margin:0 1px;border-radius:6px;font-weight:700;border-bottom:2px solid}
+  .sol.ok{color:var(--ok);background:rgba(56,224,140,.16);border-color:var(--ok)}
+  .sol.miss{color:var(--reveal);background:rgba(255,191,71,.16);border-color:var(--reveal)}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;color:var(--muted);font-size:.85rem;margin:10px 0 0}
+  .legend span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:middle}
+  .legend .lok::before{background:var(--ok)}
+  .legend .lmiss::before{background:var(--reveal)}
+
+  .bar{position:fixed;left:0;right:0;bottom:0;background:rgba(11,10,26,.82);backdrop-filter:blur(14px);border-top:1px solid var(--card-b);padding:12px;z-index:5}
+  .bar .inner{max-width:880px;margin:0 auto;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  .bar .spacer{flex:1}
+
+  /* modal */
+  .overlay{position:fixed;inset:0;background:rgba(5,4,15,.75);backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center;z-index:10;padding:18px}
+  .modal{background:linear-gradient(180deg,#1d1542,#140e30);border:1px solid var(--card-b);border-radius:24px;padding:28px;max-width:400px;width:100%;text-align:center;animation:pop .25s ease}
+  @keyframes pop{from{transform:scale(.9);opacity:0}to{transform:scale(1);opacity:1}}
+  .ring{--p:0;width:170px;height:170px;border-radius:50%;margin:10px auto 6px;display:grid;place-items:center;
+    background:conic-gradient(var(--a1) calc(var(--p)*1%),rgba(255,255,255,.1) 0)}
+  .ring div{width:138px;height:138px;border-radius:50%;background:#170f36;display:grid;place-items:center;font-size:2.4rem;font-weight:800}
+  .ring small{display:block;font-size:.95rem;color:var(--muted);font-weight:600;margin-top:-18px}
+  .modal .msg{font-size:1.15rem;font-weight:700}
+  .modal .btns{display:flex;flex-direction:column;gap:10px;margin-top:18px}
+  /* account & results */
+  .account{display:flex;justify-content:flex-end;align-items:center;min-height:40px}
+  .userBox{display:flex;align-items:center;gap:10px;font-size:.9rem}
+  .userBox img{width:30px;height:30px;border-radius:50%}
+  .userBox button{padding:7px 12px;font-size:.85rem}
+  .results{margin-top:18px}
+  .results h3{margin:0 0 12px}
+  .results ul{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+  .results li{background:rgba(0,0,0,.2);border:1px solid var(--card-b);border-radius:12px;padding:10px 14px;display:flex;justify-content:space-between;gap:4px 12px;flex-wrap:wrap}
+  .results .pct{font-weight:800;color:var(--a3)}
+  .results .meta{color:var(--muted);font-size:.82rem;width:100%}
+  footer{text-align:center;color:var(--muted);font-size:.8rem;margin-top:28px}
+  footer a{color:var(--a3)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- SETUP SCREEN -->
+  <section id="setup">
+    <div class="account">
+      <button id="loginBtn" class="hidden">🔑 Sign in with Google</button>
+      <div id="userBox" class="userBox hidden">
+        <img id="userPhoto" alt="" referrerpolicy="no-referrer">
+        <span id="userName"></span>
+        <button id="logoutBtn">Sign out</button>
+      </div>
+    </div>
+    <header class="hero">
+      <div class="eq"><i></i><i></i><i></i><i></i><i></i></div>
+      <h1>Lyrics <span>Gap Challenge</span></h1>
+      <p class="tag">Listen to the song, fill in the missing words and train your ear for real English.</p>
+    </header>
+
+    <div class="steps">
+      <div class="step"><b>1</b> Find the lyrics</div>
+      <div class="step"><b>2</b> Paste them &amp; pick difficulty</div>
+      <div class="step"><b>3</b> Listen &amp; type the gaps</div>
+    </div>
+
+    <a class="promo" href="https://www.letras.com/" target="_blank" rel="noopener noreferrer">
+      <div>
+        <div class="t">🎤 Need the lyrics? Get them on Letras.com</div>
+        <div class="s">Search your song there, copy the lyrics and paste them below.</div>
+      </div>
+      <span class="go">Open Letras.com ↗</span>
+    </a>
+
+    <div class="card">
+      <input id="titleInput" class="field" type="text" placeholder="Song title (optional)">
+      <textarea id="lyricsInput" class="field" placeholder="Paste the lyrics here…"></textarea>
+      <div class="row">
+        <span class="hint" style="margin:0">Quotes, spaces and [Verse] tags are cleaned automatically.</span>
+        <button id="normBtn">✨ Clean text</button>
+      </div>
+
+      <div class="opts">
+        <div class="opt">
+          <label>Gap density: <b id="densVal">40</b>% of the words
+            <input id="density" type="range" min="10" max="90" value="40">
+          </label>
+        </div>
+        <div class="opt">
+          <label>Minimum word length: <b id="minVal">3</b> letters
+            <input id="minLen" type="range" min="1" max="6" value="3">
+          </label>
+        </div>
+        <div class="opt">
+          <label><input id="skipParens" type="checkbox" checked> Don't hide ad-libs in (parentheses)</label>
+          <label><input id="sizeBoxes" type="checkbox" checked> Size boxes to the word length</label>
+          <label><input id="firstLetter" type="checkbox"> Show the first letter as a hint</label>
+        </div>
+      </div>
+      <button class="primary big" id="startBtn">▶ Create challenge</button>
+    </div>
+    <div class="card results hidden" id="resultsCard">
+      <h3>📈 My results</h3>
+      <ul id="resultsList"></ul>
+    </div>
+    <footer>Lyrics courtesy of <a href="https://www.letras.com/" target="_blank" rel="noopener noreferrer">Letras.com</a> — support the artists, listen on your favourite platform.</footer>
+  </section>
+
+  <!-- GAME SCREEN -->
+  <section id="game" class="hidden">
+    <div class="gameHead">
+      <h2 id="gameTitle">Challenge</h2>
+      <div class="progress" id="progress"></div>
+    </div>
+    <div class="pbar"><div id="pfill"></div></div>
+    <div class="tabs" role="tablist">
+      <button class="tab active" id="tabChallenge" role="tab" aria-selected="true">✏️ Challenge</button>
+      <button class="tab" id="tabSolution" role="tab" aria-selected="false">👁 Solution</button>
+    </div>
+    <div id="challengePane">
+      <div class="lyrics" id="lyrics"></div>
+      <p class="hint">Tab / Enter → next gap · Shift+Tab → previous · Ctrl+Enter → check answers</p>
+    </div>
+    <div id="solutionPane" class="hidden">
+      <div class="lyrics" id="solution"></div>
+      <div class="legend"><span class="lok">You got it right</span><span class="lmiss">Missing or wrong (hover to see what you wrote)</span></div>
+      <p class="hint">Your answers are kept — go back to the Challenge tab any time to keep working.</p>
+    </div>
+  </section>
+</div>
+
+<!-- BOTTOM BAR -->
+<div class="bar hidden" id="bar">
+  <div class="inner">
+    <button class="primary" id="checkBtn">✔ Check answers</button>
+    <span class="spacer"></span>
+    <button id="resetBtn">↺ Start over</button>
+    <button id="newBtn">New song</button>
+  </div>
+</div>
+
+<!-- RESULT MODAL -->
+<div class="overlay hidden" id="overlay">
+  <div class="modal">
+    <div class="msg" id="modalMsg"></div>
+    <div class="ring" id="ring"><div id="scoreBox"></div></div>
+    <small style="color:var(--muted)" id="pctBox"></small>
+    <p class="hint" id="saveNote"></p>
+    <div class="btns" id="modalBtns"></div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  let gaps = [];          // {input, answer, locked}
+  let lastSettings = null;
+  let sessionId = '';     // one saved result per challenge; re-checking updates it
+
+  $('density').oninput = e => $('densVal').textContent = e.target.value;
+  $('minLen').oninput  = e => $('minVal').textContent  = e.target.value;
+
+  // ---------- text cleanup ----------
+  function normalizeText(t){
+    return t
+      .replace(/\r/g,'')
+      .replace(/[\u2018\u2019\u02BC\u0060\u00B4]/g,"'")
+      .replace(/[\u201C\u201D]/g,'"')
+      .replace(/[\u00A0\u200B]/g,' ')
+      .split('\n')
+      .map(l => l.replace(/\s+/g,' ').trim())
+      .filter(l => !/^\[[^\]]*\]$/.test(l))
+      .join('\n')
+      .replace(/\n{3,}/g,'\n\n')
+      .trim();
+  }
+  $('normBtn').onclick = () => { $('lyricsInput').value = normalizeText($('lyricsInput').value); };
+
+  // ---------- answer comparison (apostrophes, slang endings, accents) ----------
+  function norm(s){
+    return s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]/g,'');
+  }
+  function same(a,b){
+    a = norm(a); b = norm(b);
+    if (a === b) return true;
+    const f = x => x.replace(/ing$/,'in');   // shinin' ≈ shining
+    return f(a) === f(b);
+  }
+
+  // ---------- tokenising ----------
+  const TOKEN = /^([^\p{L}\p{N}'’]*)([\p{L}\p{N}'’].*[\p{L}\p{N}'’]|[\p{L}\p{N}'’])([^\p{L}\p{N}'’]*)$/u;
+
+  function parse(text, opts){
+    const parsed = [], eligible = [];
+    text.replace(/\r/g,'').split('\n').forEach(ln => {
+      if (!ln.trim()){ parsed.push(null); return; }
+      let inParen = false;
+      const toks = ln.trim().split(/\s+/).map(raw => {
+        if (raw.includes('(')) inParen = true;
+        const wasParen = inParen;
+        if (raw.includes(')')) inParen = false;
+        const m = raw.match(TOKEN);
+        const t = {raw, gap:false};
+        if (m){
+          t.pre = m[1]; t.core = m[2]; t.suf = m[3];
+          const letters = (t.core.match(/[\p{L}\p{N}]/gu) || []).length;
+          if (letters >= opts.minLen && !(opts.skipParens && wasParen)) eligible.push(t);
+        }
+        return t;
+      });
+      parsed.push(toks);
+    });
+    return {parsed, eligible};
+  }
+
+  function pickGaps(eligible, density){
+    const n = Math.round(eligible.length * density / 100);
+    const idx = eligible.map((_, i) => i);
+    for (let i = idx.length - 1; i > 0; i--){
+      const j = Math.floor(Math.random() * (i + 1));
+      [idx[i], idx[j]] = [idx[j], idx[i]];
+    }
+    idx.slice(0, n).forEach(i => eligible[i].gap = true);
+  }
+
+  // ---------- build game ----------
+  function build(settings){
+    const {text, title, opts} = settings;
+    const {parsed, eligible} = parse(text, opts);
+    if (!eligible.length){ alert('No words available for gaps. Lower the minimum word length or paste some lyrics.'); return false; }
+    pickGaps(eligible, opts.density);
+
+    sessionId = Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+    const box = $('lyrics'); box.innerHTML = ''; gaps = [];
+    const solBox = $('solution'); solBox.innerHTML = '';
+    parsed.forEach(toks => {
+      const div = document.createElement('div');
+      const sdiv = document.createElement('div');
+      if (!toks){ div.className = sdiv.className = 'line blank'; box.appendChild(div); solBox.appendChild(sdiv); return; }
+      div.className = sdiv.className = 'line';
+      toks.forEach(t => {
+        if (!t.gap){
+          div.appendChild(document.createTextNode(t.raw + ' '));
+          sdiv.appendChild(document.createTextNode(t.raw + ' '));
+          return;
+        }
+        // solution view: answer highlighted
+        if (t.pre) sdiv.appendChild(document.createTextNode(t.pre));
+        const sw = document.createElement('span'); sw.className = 'sol miss'; sw.textContent = t.core;
+        sdiv.appendChild(sw);
+        sdiv.appendChild(document.createTextNode((t.suf || '') + ' '));
+        const wrap = document.createElement('span'); wrap.className = 'gap';
+        if (t.pre) wrap.appendChild(document.createTextNode(t.pre));
+        const inp = document.createElement('input');
+        inp.type = 'text'; inp.autocomplete = 'off'; inp.autocapitalize = 'off';
+        inp.spellcheck = false; inp.setAttribute('autocorrect','off');
+        if (opts.firstLetter) inp.placeholder = t.core[0];
+        const len = Math.max(3, t.core.length);
+        inp.style.width = (opts.sizeBoxes ? len + 1.5 : 9) + 'ch';
+        const g = {input: inp, answer: t.core, locked: false, sol: sw};
+        gaps.push(g);
+        inp.addEventListener('input', updateProgress);
+        inp.addEventListener('keydown', e => onKey(e, g));
+        wrap.appendChild(inp);
+        wrap.appendChild(document.createTextNode((t.suf || '') + ' '));
+        div.appendChild(wrap);
+      });
+      box.appendChild(div);
+      solBox.appendChild(sdiv);
+    });
+    showTab('challenge');
+    $('gameTitle').textContent = title || 'Challenge';
+    $('setup').classList.add('hidden');
+    $('game').classList.remove('hidden');
+    $('bar').classList.remove('hidden');
+    $('checkBtn').disabled = false;
+    updateProgress();
+    focusNext(-1);
+    window.scrollTo(0,0);
+    return true;
+  }
+
+  function updateProgress(){
+    const filled = gaps.filter(g => g.locked || g.input.value.trim()).length;
+    $('progress').textContent = `${filled} / ${gaps.length} gaps filled`;
+    $('pfill').style.width = (gaps.length ? filled / gaps.length * 100 : 0) + '%';
+  }
+
+  // ---------- keyboard ----------
+  function focusNext(fromIndex){
+    for (let i = fromIndex + 1; i < gaps.length; i++){
+      if (!gaps[i].locked && !gaps[i].input.readOnly){ gaps[i].input.focus(); return true; }
+    }
+    return false;
+  }
+  function onKey(e, g){
+    if (e.key === 'Enter'){
+      e.preventDefault();
+      if (e.ctrlKey || e.metaKey){ check(); return; }
+      if (!focusNext(gaps.indexOf(g))) $('checkBtn').focus();
+    }
+  }
+
+  // ---------- check ----------
+  function check(){
+    showTab('challenge');
+    let correct = 0;
+    gaps.forEach(g => {
+      if (g.locked){ correct++; return; }
+      const v = g.input.value.trim();
+      const ok = v && same(v, g.answer);
+      g.input.classList.remove('ok','bad');
+      if (ok){
+        g.input.value = g.answer;
+        g.input.classList.add('ok');
+        g.input.readOnly = true; g.input.tabIndex = -1; g.locked = true; correct++;
+      } else {
+        void g.input.offsetWidth;
+        g.input.classList.add('bad');
+      }
+    });
+    updateProgress();
+    showResult(correct, gaps.length);
+    // let the Firebase module (if loaded) save this attempt
+    window.dispatchEvent(new CustomEvent('challenge:checked', { detail: {
+      sessionId,
+      title: (lastSettings && lastSettings.title) || 'Untitled song',
+      correct, total: gaps.length,
+      pct: Math.round(correct / gaps.length * 100),
+      missed: gaps.filter(g => !g.locked).map(g => g.answer)
+    }}));
+  }
+
+  function showResult(correct, total){
+    const perfect = correct === total;
+    const pct = Math.round(correct / total * 100);
+    $('scoreBox').textContent = `${correct} / ${total}`;
+    $('ring').style.setProperty('--p', pct);
+    $('pctBox').textContent = pct + '% correct';
+    $('saveNote').textContent = '';
+    $('modalMsg').textContent = perfect ? '🎉 Perfect score!' : (pct >= 70 ? '🔥 Almost there!' : 'Keep going!');
+    const btns = $('modalBtns'); btns.innerHTML = '';
+    const mk = (label, cls, fn) => {
+      const b = document.createElement('button'); b.textContent = label;
+      if (cls) b.className = cls; b.onclick = () => { closeModal(); fn(); }; btns.appendChild(b);
+    };
+    const toSolution = () => showTab('solution');
+    if (perfect){
+      mk('See the full solution', 'primary', toSolution);
+      mk('Start over', '', reset);
+    } else {
+      mk('Review & fix the wrong ones', 'primary', () => {
+        const first = gaps.find(g => !g.locked);
+        if (first){ first.input.focus(); first.input.select(); first.input.scrollIntoView({block:'center'}); }
+      });
+      mk('See the answers', '', toSolution);
+      mk('Start over', '', reset);
+    }
+    $('overlay').classList.remove('hidden');
+    btns.querySelector('button').focus();
+  }
+  function closeModal(){ $('overlay').classList.add('hidden'); }
+
+  // ---------- tabs (solution is a separate view; answers are never erased) ----------
+  function refreshSolution(){
+    gaps.forEach(g => {
+      const attempt = g.input.value.trim();
+      const ok = g.locked || (attempt && same(attempt, g.answer));
+      g.sol.className = 'sol ' + (ok ? 'ok' : 'miss');
+      g.sol.title = ok ? 'Correct' : (attempt ? `You wrote: ${attempt}` : 'Left empty');
+    });
+  }
+  function showTab(name){
+    const sol = name === 'solution';
+    if (sol) refreshSolution();
+    $('challengePane').classList.toggle('hidden', sol);
+    $('solutionPane').classList.toggle('hidden', !sol);
+    $('tabChallenge').classList.toggle('active', !sol);
+    $('tabSolution').classList.toggle('active', sol);
+    $('tabChallenge').setAttribute('aria-selected', !sol);
+    $('tabSolution').setAttribute('aria-selected', sol);
+  }
+  $('tabChallenge').onclick = () => showTab('challenge');
+  $('tabSolution').onclick = () => showTab('solution');
+
+  // ---------- controls ----------
+  function reset(){ if (lastSettings) build(lastSettings); }
+  function newSong(){
+    $('game').classList.add('hidden'); $('bar').classList.add('hidden');
+    $('setup').classList.remove('hidden'); closeModal();
+    $('lyricsInput').focus();
+  }
+
+  $('startBtn').onclick = () => {
+    const text = normalizeText($('lyricsInput').value);
+    if (!text.trim()){ alert('Paste some lyrics first.'); return; }
+    lastSettings = {
+      text, title: $('titleInput').value.trim(),
+      opts: {
+        density: +$('density').value, minLen: +$('minLen').value,
+        skipParens: $('skipParens').checked, sizeBoxes: $('sizeBoxes').checked,
+        firstLetter: $('firstLetter').checked
+      }
+    };
+    build(lastSettings);
+  };
+  $('checkBtn').onclick = check;
+  $('resetBtn').onclick = () => { if (confirm('Start over with new random gaps?')) reset(); };
+  $('newBtn').onclick = newSong;
+  $('overlay').addEventListener('click', e => { if (e.target === $('overlay')) closeModal(); });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') closeModal();
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !$('game').classList.contains('hidden')) check();
+  });
+})();
+</script>
+
+<!-- FIREBASE: Google login + saved results (the game still works if this fails to load) -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged }
+  from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getFirestore, doc, setDoc, serverTimestamp, collection, query, orderBy, limit, getDocs }
+  from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+// Public web config (safe to publish; access is controlled by Firestore security rules)
+const firebaseConfig = {
+  apiKey: "AIzaSyCO-h9HEdWHU0ehSIIWEErONYolxCNiPYA",
+  authDomain: "lyrics-gap-challenge.firebaseapp.com",
+  projectId: "lyrics-gap-challenge",
+  storageBucket: "lyrics-gap-challenge.firebasestorage.app",
+  messagingSenderId: "651059037021",
+  appId: "1:651059037021:web:3e6a3781f07ab2ad9adeb4"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const $ = id => document.getElementById(id);
+let user = null;
+
+$('loginBtn').onclick = async () => {
+  try { await signInWithPopup(auth, new GoogleAuthProvider()); }
+  catch (e) { if (e.code !== 'auth/popup-closed-by-user') alert('Sign-in failed: ' + e.message); }
+};
+$('logoutBtn').onclick = () => signOut(auth);
+
+onAuthStateChanged(auth, u => {
+  user = u;
+  $('loginBtn').classList.toggle('hidden', !!u);
+  $('userBox').classList.toggle('hidden', !u);
+  $('resultsCard').classList.toggle('hidden', !u);
+  if (u){
+    $('userName').textContent = u.displayName || u.email;
+    if (u.photoURL) $('userPhoto').src = u.photoURL;
+    loadResults();
+  }
+});
+
+const resultsCol = () => collection(db, 'users', user.uid, 'results');
+
+async function loadResults(){
+  const list = $('resultsList');
+  const li = (text) => { const el = document.createElement('li'); el.textContent = text; list.appendChild(el); };
+  list.innerHTML = '';
+  try {
+    const snap = await getDocs(query(resultsCol(), orderBy('updatedAt', 'desc'), limit(10)));
+    if (snap.empty){ li('No results yet. Finish a challenge and press "Check answers".'); return; }
+    snap.forEach(d => {
+      const r = d.data();
+      const el = document.createElement('li');
+      const t = document.createElement('span'); t.textContent = r.title;
+      const p = document.createElement('span'); p.className = 'pct'; p.textContent = `${r.correct}/${r.total} · ${r.pct}%`;
+      const m = document.createElement('span'); m.className = 'meta';
+      const when = r.updatedAt ? r.updatedAt.toDate().toLocaleString() : '';
+      m.textContent = when + (r.missed && r.missed.length ? ` · Missed: ${r.missed.slice(0, 12).join(', ')}${r.missed.length > 12 ? '…' : ''}` : ' · No mistakes 🎉');
+      el.append(t, p, m);
+      list.appendChild(el);
+    });
+  } catch (e) { console.error(e); li('Could not load your results.'); }
+}
+
+window.addEventListener('challenge:checked', async e => {
+  const note = $('saveNote');
+  if (!user){ note.textContent = 'Sign in with Google (on the home screen) to save your scores.'; return; }
+  const r = e.detail;
+  note.textContent = 'Saving…';
+  try {
+    await setDoc(doc(resultsCol(), r.sessionId), {
+      title: r.title.slice(0, 200), correct: r.correct, total: r.total, pct: r.pct,
+      missed: r.missed.slice(0, 200), updatedAt: serverTimestamp()
+    });
+    note.textContent = '✓ Saved to your results';
+    loadResults();
+  } catch (err) { console.error(err); note.textContent = 'Could not save this result.'; }
+});
+</script>
+</body>
+</html>

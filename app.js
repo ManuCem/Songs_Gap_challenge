@@ -561,10 +561,11 @@ const isoDur = s => { const m = String(s).match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+
 const decodeHtml = s => new DOMParser().parseFromString(s, 'text/html').documentElement.textContent;
 const ytCache = new Map();
 
-function ytSearch(q){
-  if (ytCache.has(q)) return ytCache.get(q);
+function ytSearch(q, filter = 'videos'){
+  const ck = filter + '|' + q;
+  if (ytCache.has(ck)) return ytCache.get(ck);
   const p = (async () => {
-    if (YT_KEY){
+    if (YT_KEY && filter === 'videos'){
       try {
         const r = await fetch(`https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&videoEmbeddable=true&maxResults=10&q=${encodeURIComponent(q)}&key=${YT_KEY}`);
         if (r.ok){
@@ -580,7 +581,7 @@ function ytSearch(q){
     }
     for (const base of [...PIPED]){
       try {
-        const r = await fetch(`${base}/search?q=${encodeURIComponent(q)}&filter=videos`, { signal: timeoutSignal(7000) });
+        const r = await fetch(`${base}/search?q=${encodeURIComponent(q)}&filter=${filter}`, { signal: timeoutSignal(7000) });
         if (!r.ok) continue;
         const items = ((await r.json()).items || [])
           .filter(i => i.type === 'stream' && /v=[\w-]{11}/.test(i.url) && !i.isShort && i.duration !== -1)
@@ -590,8 +591,8 @@ function ytSearch(q){
     }
     throw new Error('No YouTube search available');
   })();
-  ytCache.set(q, p);
-  p.catch(() => ytCache.delete(q));
+  ytCache.set(ck, p);
+  p.catch(() => ytCache.delete(ck));
   return p;
 }
 function ytKind(c){
@@ -620,9 +621,12 @@ async function loadMusic(song){
   renderMusic();
   const q = [primaryArtist(song.artist), cleanTitle(song.title)].filter(Boolean).join(' ');
   try {
-    const list = await ytSearch(q);
+    const [songs, vids] = await Promise.allSettled([ytSearch(q, 'music_songs'), ytSearch(q, 'videos')]);
+    const seen = new Set();
+    const list = [...(songs.value || []).map(c => ({ ...c, topic: true })), ...(vids.value || [])].filter(c => !seen.has(c.id) && seen.add(c.id));
+    if (!list.length) throw new Error('No music found');
     if (SETUP.song !== song) return;
-    SETUP.cands = list.map((c, i) => ({ ...c, i, kind: ytKind(c) }));
+    SETUP.cands = list.map((c, i) => ({ ...c, i, kind: c.topic ? 'audio' : ytKind(c) }));
   } catch (e){
     if (SETUP.song !== song) return;
     console.warn(e);
@@ -638,7 +642,10 @@ function rankedCands(kind){
   // only keep videos whose title contains the song name (drops other songs by the same artist)
   const want = norm(cleanTitle(SETUP.song.title));
   const match = SETUP.cands.filter(c => !want || norm(c.title).includes(want));
-  return rankFor(match.length ? match : SETUP.cands, kind, SETUP.song.duration, SETUP.song.title);
+  // never use lyric videos: they show the answers on screen
+  const pool = match.length ? match : SETUP.cands;
+  const noLyrics = pool.filter(c => c.kind !== 'lyric');
+  return rankFor(noLyrics.length ? noLyrics : pool, kind, SETUP.song.duration, SETUP.song.title);
 }
 const autoPick = k => SETUP.pick[k] || rankedCands(k)[0]?.id || SETUP.custom || '';
 function setMusic(k){
@@ -1688,10 +1695,14 @@ function renderStats(){
       h('div', { class: 'card' },
         h('h3', { text: 'Words you miss most' }),
         top.length ? h('div', { class: 'words' }, top.map(([w, n]) => h('span', { class: 'word' }, w, n > 1 ? h('small', { text: '×' + n }) : null)))
-                   : h('p', { class: 'muted', text: 'No mistakes yet. Impressive!' }),
-        h('button', { class: 'btn primary full', text: '🎯 Practise my mistakes', disabled: !top.length, onclick: startPractice }))),
+                   : h('p', { class: 'muted', text: 'No mistakes yet. Impressive!' }))),
     h('div', { class: 'card', style: 'margin-top:12px' },
-      h('div', { class: 'card-head' }, h('h3', { text: 'Your last games' }), h('span', { class: 'muted small', text: '🔒 Only you can see this' })),
+      h('div', { class: 'card-head' },
+        h('h3', { text: 'Your last games' }),
+        h('span', { class: 'muted small grow-r', text: '🔒 Only you can see this' }),
+        results.length ? h('button', { class: 'btn small', text: '🗑 Clear history', onclick: () =>
+          askConfirm('Clear your whole history?', 'All your games are deleted from your stats. Your XP, level, streak and library stay.', '🗑 Delete all games',
+            () => cloud.clearResults().then(() => toast('History cleared')).catch(e => { console.error(e); toast('Could not clear the history.'); })) }) : null),
       results.length ? h('ul', { class: 'games' }, results.slice(0, 20).map(gameRow))
       : h('p', { class: 'muted', text: 'Nothing yet. Your games appear here after your first try.' })));
 }
@@ -1702,7 +1713,10 @@ function gameRow(r){
   return h('li', null,
     h('div', { class: 'g-top' },
       h('span', { class: 't', text: r.title + (r.artist ? ' · ' + r.artist : '') }),
-      h('span', { class: 'p', text: r.pct + '%' })),
+      h('span', { class: 'p', text: r.pct + '%' }),
+      h('button', { class: 'g-del', title: 'Delete this game', 'aria-label': 'Delete this game', text: '🗑',
+        onclick: () => askConfirm('Delete this game?', `“${r.title}” (${r.pct}%) is removed from your history.`, '🗑 Delete',
+          () => cloud.deleteResult(r.id).catch(e => { console.error(e); toast('Could not delete this game.'); })) })),
     h('div', { class: 'g-tries' },
       scores.map((c, i) => [
         i ? h('span', { class: 'arrow', text: '→' }) : null,
@@ -1733,26 +1747,6 @@ function chart(rs){
   });
   return svg;
 }
-function startPractice(){
-  const lines = [], force = [], seen = new Set();
-  for (const r of cloud.state.results){
-    for (const p of r.missedPairs || []){
-      if (!p.l || !p.w) continue;
-      const i = lines.indexOf(p.l);
-      if (i >= 0){ force[i].push(norm(p.w)); continue; }
-      if (lines.length >= 30 || seen.has(p.l)) continue;
-      seen.add(p.l); lines.push(p.l); force.push([norm(p.w)]);
-    }
-  }
-  if (!lines.length){ toast('Play a few songs first. Your mistakes will show up here.'); return; }
-  startGame({
-    src: 'practice', id: '', title: 'Practice: my mistakes', artist: `${lines.length} lines from your recent songs`, cover: '',
-    lines, times: null, force, preset: 'custom', mode: 'type',
-    opts: { density: 100, minLen: 1, focus: 'any', firstLetter: false, sizeBoxes: true, skipParens: false, instant: true },
-    seed: newSeed(), yt: '', offset: 0
-  });
-}
-
 // =====================================================================
 // PWA: offline cache + install button
 // =====================================================================

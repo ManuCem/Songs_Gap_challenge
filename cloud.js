@@ -76,6 +76,22 @@ export async function saveResult(id, r){
   emit();
 }
 
+export async function deleteResult(id){
+  await deleteDoc(doc(db, 'users', uid(), 'results', id));
+  state.results = state.results.filter(r => r.id !== id);
+  emit();
+}
+export async function clearResults(){
+  const col = collection(db, 'users', uid(), 'results');
+  for (;;){
+    const snap = await getDocs(query(col, limit(100)));
+    if (snap.empty) break;
+    await Promise.all(snap.docs.map(d => deleteDoc(d.ref)));
+  }
+  state.results = [];
+  emit();
+}
+
 // ---------- library (saved songs with labels) ----------
 export async function loadLibrary(){
   const snap = await getDocs(collection(db, 'users', uid(), 'songs'));

@@ -151,11 +151,11 @@ function parseLines(lines, o, force){
     if (!ln.trim()){ parsed.push(null); return; }
     let inParen = false;
     const want = force ? new Set(force[li] || []) : null;
-    parsed.push(ln.trim().split(/\s+/).map(raw => {
+    parsed.push(ln.trim().split(/\s+/).map((raw, pos) => {
       if (raw.includes('(')) inParen = true;
       const wasParen = inParen;
       if (raw.includes(')')) inParen = false;
-      const t = { raw, gap: false, line: li };
+      const t = { raw, gap: false, line: li, pos };
       const m = raw.match(TOKEN);
       if (m){
         t.pre = m[1]; t.core = m[2]; t.suf = m[3];
@@ -760,6 +760,27 @@ function normalizeSettings(s){
   return s;
 }
 
+// Spread the gaps evenly: every line gets one gap before any line gets a second,
+// and gaps on the same line avoid sitting next to each other when possible.
+function pickSpread(eligible, n, rand){
+  const byLine = new Map();
+  eligible.forEach(t => { if (!byLine.has(t.line)) byLine.set(t.line, []); byLine.get(t.line).push(t); });
+  const lines = [...byLine.values()].map(arr => shuffle(arr, rand));
+  let left = n;
+  while (left > 0){
+    let progress = false;
+    for (const arr of shuffle([...lines], rand)){
+      if (left <= 0) break;
+      const free = arr.filter(t => !t.gap);
+      if (!free.length) continue;
+      const taken = arr.filter(t => t.gap).map(t => t.pos);
+      const pick = free.find(t => !taken.some(p => Math.abs(p - t.pos) <= 1)) || free[0];
+      pick.gap = true; left--; progress = true;
+    }
+    if (!progress) break;
+  }
+}
+
 function startGame(s, restore){
   s = normalizeSettings(s);
   const { parsed, eligible } = parseLines(s.lines, s.opts, s.force);
@@ -768,7 +789,7 @@ function startGame(s, restore){
   if (s.force) eligible.forEach(t => t.gap = true);
   else {
     const n = Math.max(1, Math.round(eligible.length * s.opts.density / 100));
-    shuffle(eligible.map((_, i) => i), rand).slice(0, n).forEach(i => eligible[i].gap = true);
+    pickSpread(eligible, n, rand);
   }
   const pool = s.mode === 'choice' ? buildPool(parsed) : null;
 

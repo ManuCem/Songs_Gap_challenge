@@ -289,6 +289,7 @@ input[type=checkbox]{accent-color:var(--accent-line);width:17px;height:17px;flex
 .line.seek{cursor:pointer}
 .line.seek:hover{background:var(--surface-2)}
 .line.now{background:var(--accent-soft);box-shadow:inset 3px 0 0 var(--accent-line)}
+.line.blank.now{background:none;box-shadow:none}
 .line.wait{background:var(--warn-bg);box-shadow:inset 3px 0 0 var(--warn)}
 .gap{display:inline-block;white-space:nowrap}
 .gap input{font:inherit;text-align:center;color:var(--text);background:var(--surface-2);border:0;border-bottom:2px solid var(--muted);border-radius:7px 7px 3px 3px;padding:1px 4px;margin:2px;outline:none;max-width:70vw;transition:background .15s,border-color .15s,color .15s}

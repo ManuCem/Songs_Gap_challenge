@@ -2,17 +2,57 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Each signed-in user can only read and write their own results.
-    match /users/{uid}/results/{resultId} {
-      allow read, delete: if request.auth != null && request.auth.uid == uid;
+    function signedIn() { return request.auth != null; }
+    function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
+    function d() { return request.resource.data; }
 
-      allow create, update: if request.auth != null && request.auth.uid == uid
-        && request.resource.data.keys().hasOnly(['title', 'correct', 'total', 'pct', 'missed', 'updatedAt'])
-        && request.resource.data.title is string && request.resource.data.title.size() <= 200
-        && request.resource.data.correct is int && request.resource.data.total is int
-        && request.resource.data.pct is int
-        && request.resource.data.missed is list && request.resource.data.missed.size() <= 200
-        && request.resource.data.updatedAt == request.time;
+    // Profile: XP and daily streak. Only you can read/write yours.
+    match /users/{uid} {
+      allow read: if isOwner(uid);
+      allow create, update: if isOwner(uid)
+        && d().keys().hasOnly(['xp', 'streak', 'lastPlayed', 'updatedAt'])
+        && d().xp is int && d().xp >= 0
+        && d().streak is int && d().streak >= 0
+        && d().lastPlayed is string && d().lastPlayed.size() <= 10
+        && d().updatedAt == request.time;
+
+      // Results of each challenge
+      match /results/{resultId} {
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid)
+          && d().keys().hasOnly(['title', 'artist', 'songId', 'correct', 'total', 'pct', 'missed', 'missedPairs',
+                                 'mode', 'preset', 'seconds', 'hints', 'updatedAt'])
+          && d().title is string && d().title.size() <= 200
+          && d().correct is int && d().total is int && d().pct is int
+          && d().missed is list && d().missed.size() <= 200
+          && (!('missedPairs' in d()) || (d().missedPairs is list && d().missedPairs.size() <= 100))
+          && d().updatedAt == request.time;
+      }
+
+      // Library: saved songs with labels
+      match /songs/{songKey} {
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid)
+          && d().keys().hasOnly(['title', 'artist', 'songId', 'lyrics', 'cover', 'youtube', 'offset',
+                                 'tags', 'best', 'plays', 'updatedAt'])
+          && d().title is string && d().title.size() <= 200
+          && d().tags is list && d().tags.size() <= 12
+          && (!('lyrics' in d()) || (d().lyrics is string && d().lyrics.size() <= 30000))
+          && d().updatedAt == request.time;
+      }
+    }
+
+    // Leaderboards: every signed-in user can read; you can only write your own score.
+    match /leaderboards/{board}/scores/{uid} {
+      allow read: if signedIn();
+      allow delete: if isOwner(uid);
+      allow create, update: if isOwner(uid)
+        && d().keys().hasOnly(['name', 'pct', 'seconds', 'rank', 'updatedAt'])
+        && d().name is string && d().name.size() <= 40
+        && d().pct is int && d().pct >= 0 && d().pct <= 100
+        && d().seconds is int && d().seconds >= 0
+        && d().rank is number
+        && d().updatedAt == request.time;
     }
 
     // Everything else is locked.

@@ -109,12 +109,13 @@ function shortName(){
   return (parts[0] + (parts[1] ? ' ' + parts[1][0] + '.' : '')).slice(0, 40);
 }
 
-export async function submitScore(board, pct, seconds){
+// better score first, then fewer tries, then fewer hints
+export async function submitScore(board, pct, tries, hints){
   const ref = doc(db, 'leaderboards', board, 'scores', uid());
-  const rank = pct * 1000000 - Math.min(Math.round(seconds), 999999);
+  const rank = pct * 1000000 - Math.min(tries, 999) * 1000 - Math.min(hints, 999);
   const cur = await getDoc(ref);
   if (cur.exists() && cur.data().rank >= rank) return false;
-  await setDoc(ref, { name: shortName(), pct, seconds: Math.round(seconds), rank, updatedAt: serverTimestamp() });
+  await setDoc(ref, { name: shortName(), pct, tries, hints, rank, updatedAt: serverTimestamp() });
   return true;
 }
 

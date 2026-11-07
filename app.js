@@ -128,7 +128,7 @@ const PRESETS = {
   hard:   { density: 55, minLen: 2, focus: 'any',     firstLetter: false, sizeBoxes: false, desc: 'More than half the words, short ones too, and no length clues.' },
   insane: { density: 85, minLen: 1, focus: 'any',     firstLetter: false, sizeBoxes: false, desc: 'Almost every word is gone. Good luck. 🔥' },
 };
-const MODE_LABEL = { type: '✍️ Type', choice: '🎯 Choose', listen: '🎧 Listen-along' };
+const MODE_LABEL = { type: '✍️ Type', choice: '🎯 Choose', listen: '✍️ Type' };
 const PRESET_LABEL = { easy: 'Easy', medium: 'Medium', hard: 'Hard', insane: 'Insane', custom: 'Custom' };
 
 // split one word token into [prefix punctuation, word, suffix punctuation]
@@ -261,7 +261,7 @@ $('searchInput').addEventListener('keydown', e => {
 const ITUNES = 'https://itunes.apple.com/search';
 const primaryArtist = a => (String(a || '').split(/\s*(?:,|&|\/|\bfeat\.?\s|\bft\.?\s|\bx\s|\band\s|\bwith\s)\s*/i)[0] || '').trim() || String(a || '');
 const cleanTitle = t => String(t || '')
-  .replace(/\s*[([][^)\]]*\b(feat|ft|with|remaster(ed)?|version|edit|live|mono|stereo|deluxe|bonus|explicit|clean|mix|from)\b[^)\]]*[)\]]/gi, '')
+  .replace(/\s*[([][^)\]]*\b(feat|ft|with|prod|remaster(ed)?|version|edit|live|mono|stereo|deluxe|bonus|explicit|clean|mix|from|lyrics?|audio|official)\b[^)\]]*[)\]]/gi, '')
   .replace(/\s+-\s+.*\b(remaster(ed)?|live|version|edit|mix)\b.*$/i, '').trim() || String(t || '');
 const searchCache = new Map();
 
@@ -287,7 +287,40 @@ async function itunesSearch(q){
 async function lrclibSearch(q){
   const r = await fetch(`${LRCLIB}/search?q=${encodeURIComponent(q)}`);
   if (!r.ok) throw new Error('LRCLIB ' + r.status);
-  return dedupe(await r.json()).map(j => ({ title: j.trackName, artist: j.artistName, album: j.albumName || '', duration: j.duration || 0, cover: '', thumb: '', year: '', lyr: Promise.resolve(j) }));
+  return dedupe(await r.json()).map(j => ({ title: j.trackName, artist: j.artistName, album: j.albumName || '', duration: Math.round(j.duration || 0), cover: '', thumb: '', year: '', lyr: Promise.resolve(j), fromLyrics: true, raw: j }));
+}
+
+// how well a result matches what you typed: "trojan horse dave" → Dave (all words, nothing extra) beats Dave Eggar
+const words = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').split(/[^a-z0-9']+/).map(w => w.replace(/'/g, '')).filter(Boolean);
+function matchScore(t, qWords){
+  if (!qWords.length) return 0;
+  const tw = new Set(words(cleanTitle(t.title))), aw = new Set(words(t.artist));
+  const hit = qWords.filter(w => tw.has(w) || aw.has(w)).length;
+  const artistMain = words(primaryArtist(t.artist));
+  let s = hit / qWords.length * 10;
+  if (artistMain.length && artistMain.every(w => qWords.includes(w))) s += 3;   // you named the artist
+  if (tw.size && [...tw].every(w => qWords.includes(w))) s += 2;                 // you named the whole title
+  return s;
+}
+
+// Apple (popular songs + covers) and the lyrics database (finds songs Apple misses) at the same time
+async function combinedSearch(q){
+  const [it, lr] = await Promise.allSettled([itunesSearch(q), lrclibSearch(q)]);
+  const apple = it.status === 'fulfilled' ? it.value : [];
+  const lyr = lr.status === 'fulfilled' ? lr.value : [];
+  if (!apple.length && !lyr.length && it.status === 'rejected' && lr.status === 'rejected') throw new Error('Both searches failed');
+  const key = t => norm(cleanTitle(t.title)) + '|' + norm(primaryArtist(t.artist));
+  const byKey = new Map();
+  apple.forEach(t => byKey.set(key(t), t));
+  const all = [...apple];
+  lyr.forEach(t => {
+    const a = byKey.get(key(t));
+    if (a){ if (!a.lyr && (!a.duration || !t.duration || Math.abs(a.duration - t.duration) <= 12)) a.lyr = t.lyr; return; }
+    byKey.set(key(t), t); all.push(t);
+  });
+  const qWords = words(q);
+  return all.map((t, i) => ({ t, s: matchScore(t, qWords) - i * 0.15 }))
+    .sort((a, b) => b.s - a.s).map(x => x.t).slice(0, 12);
 }
 
 // best LRCLIB entry for a track: right length (±12 s), synced if possible
@@ -324,8 +357,7 @@ async function doSearch(q){
     const key = q.toLowerCase();
     let list = searchCache.get(key);
     if (!list){
-      try { list = await itunesSearch(q); } catch (e){ console.warn(e); list = []; }
-      if (!list.length) list = await lrclibSearch(q);
+      list = await combinedSearch(q);
       searchCache.set(key, list);
     }
     if (seq !== searchSeq) return;
@@ -377,6 +409,12 @@ function renderResults(list, msg){
       h('div', { class: 'r-meta' }, t.duration ? h('span', { text: fmtTime(t.duration) }) : null, badge));
     // check lyrics for the top results in the background so the badges fill in
     if (i < 6 || t.lyr) lyricsFor(t).then(j => lyricsBadge(badge, j));
+    // songs found only in the lyrics database: try to fetch their album art
+    if (!t.thumb && t.fromLyrics && i < 4) findCover(t.title, primaryArtist(t.artist)).then(url => {
+      if (!url) return;
+      t.cover = url; t.thumb = url.replace('600x600bb', '200x200bb');
+      card.querySelector('.tile')?.replaceWith(tile(t.title, t.thumb));
+    });
     return card;
   }));
 }
@@ -408,12 +446,14 @@ function renderContinue(){
   const box = $('continueCard');
   let title, sub, go;
   if (G.active && !G.done){
-    title = G.s.title; sub = `${filledCount()} / ${G.gaps.length} gaps · in progress`;
-    go = () => showView('game');
+    title = G.s.title;
+    sub = `${G.lastChance ? '❤️ Last chance' : 'Try ' + G.tryNo} · ${lockedCount()} / ${G.gaps.length} correct`;
+    go = () => { showView('game'); if (G.phase !== 'playing') showReady(); };
   } else {
     const p = store.get('progress', null);
     if (!p || !p.s){ box.classList.add('hidden'); return; }
-    title = p.s.title; sub = `${p.filled || 0} / ${p.total || '?'} gaps · ${timeAgo(new Date(p.at))}`;
+    title = p.s.title;
+    sub = `${p.lastChance ? '❤️ Last chance' : 'Try ' + (p.tryNo || 1)} · ${p.filled || 0} / ${p.total || '?'} correct · ${timeAgo(new Date(p.at))}`;
     go = () => startGame(p.s, p);
   }
   box.replaceChildren(
@@ -435,10 +475,10 @@ function openSetup(song, extra = {}){
   SETUP.song = song;
   SETUP.offset = extra.offset || 0;
   SETUP.preset = prefs.preset || 'medium';
-  SETUP.mode = prefs.mode || 'type';
-  SETUP.opts = { ...PRESETS.medium, skipParens: true, instant: true, ...(prefs.opts || {}) };
+  SETUP.mode = prefs.mode === 'choice' ? 'choice' : 'type';
+  SETUP.pauseLines = !!prefs.pauseLines || prefs.mode === 'listen';
+  SETUP.opts = { ...PRESETS.medium, skipParens: true, ...(prefs.opts || {}), instant: true };
   if (SETUP.preset !== 'custom') Object.assign(SETUP.opts, PRESETS[SETUP.preset]);
-  if (SETUP.mode === 'listen' && !song.times) SETUP.mode = 'type';
 
   $('setupTitle').textContent = song.title;
   $('setupArtist').textContent = [song.artist, song.album].filter(Boolean).join(' · ') || 'Your own lyrics';
@@ -457,7 +497,7 @@ function openSetup(song, extra = {}){
     });
   }
   $('lyricsPreview').replaceChildren(...song.lines.filter(Boolean).slice(0, 12).map(l => h('div', { text: l })));
-  SETUP.music = prefs.music || 'audio';
+  SETUP.music = prefs.music === 'off' ? 'off' : 'audio';
   SETUP.custom = SETUP.yt = extra.yt || '';
   SETUP.pick = {};
   SETUP.cands = null;
@@ -466,11 +506,6 @@ function openSetup(song, extra = {}){
   SETUP.loading = false;
   if (SETUP.music !== 'off') loadMusic(song); else renderMusic();
   $('ytFind').href = `https://www.youtube.com/results?search_query=${encodeURIComponent([song.artist, song.title, 'lyrics'].filter(Boolean).join(' '))}`;
-  const listenBtn = $('modeSeg').querySelector('[data-m=listen]');
-  listenBtn.disabled = !song.times;
-  $('listenDesc').textContent = song.times
-    ? 'The song pauses after each line so you can fill it in.'
-    : 'Only for songs with synced lyrics (⏱). Try another version of the song.';
   renderSetupControls();
   showView('setup');
 }
@@ -484,8 +519,14 @@ function renderSetupControls(){
   $('minLen').value = o.minLen; $('minVal').textContent = o.minLen;
   $('focusSel').value = o.focus;
   $('optFirst').checked = !!o.firstLetter; $('optSize').checked = !!o.sizeBoxes;
-  $('optParens').checked = !!o.skipParens; $('optInstant').checked = !!o.instant;
+  $('optParens').checked = !!o.skipParens;
+  // "pause after each line" needs timed lyrics + music
+  const canPause = !!(SETUP.song?.times && SETUP.music !== 'off');
+  $('optPause').disabled = !canPause;
+  $('optPause').checked = canPause && SETUP.pauseLines;
+  $('pauseNote').textContent = !SETUP.song?.times ? '(needs synced lyrics ⏱)' : SETUP.music === 'off' ? '(needs music)' : '(easier: the song waits for you)';
 }
+$('optPause').onchange = e => { SETUP.pauseLines = e.target.checked; };
 $('presetSeg').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   SETUP.preset = b.dataset.p; Object.assign(SETUP.opts, PRESETS[SETUP.preset]); renderSetupControls();
@@ -493,7 +534,6 @@ $('presetSeg').addEventListener('click', e => {
 $('modeSeg').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b || b.disabled) return;
   SETUP.mode = b.dataset.m; renderSetupControls();
-  if (SETUP.mode === 'listen' && SETUP.music === 'off') setMusic('audio');
 });
 const customize = (key, val) => { SETUP.opts[key] = val; SETUP.preset = 'custom'; renderSetupControls(); };
 $('density').oninput = e => customize('density', +e.target.value);
@@ -502,7 +542,6 @@ $('focusSel').onchange = e => customize('focus', e.target.value);
 $('optFirst').onchange = e => customize('firstLetter', e.target.checked);
 $('optSize').onchange = e => customize('sizeBoxes', e.target.checked);
 $('optParens').onchange = e => { SETUP.opts.skipParens = e.target.checked; };
-$('optInstant').onchange = e => { SETUP.opts.instant = e.target.checked; };
 $('setupBack').onclick = () => showView('play');
 
 function ytId(url){
@@ -609,20 +648,19 @@ function setMusic(k){
     else SETUP.yt = autoPick(k);
   }
   renderMusic();
+  renderSetupControls();
 }
 function renderMusic(){
   const k = SETUP.music;
   $('musicSeg').querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.k === k));
-  $('musicHint').textContent = {
-    audio: '🎧 Plays the official audio (only the album cover is shown). This syncs best with the karaoke.',
-    video: '🎬 Plays the music video. Clips sometimes have an intro, so use the sync buttons if the lyrics run early.',
-    off: '🔇 No music. You can still play, but the lyrics won’t follow the song.'
-  }[k];
+  $('musicHint').textContent = k === 'off'
+    ? '🔇 No music: fill in the gaps by yourself and press “End try” when you’re done.'
+    : '🎧 The song plays in a small music player. The version below is picked automatically; tap another one to change it.';
   const box = $('ytPicks');
   $('ytManual').classList.toggle('hidden', k === 'off');
   if (k === 'off'){ box.replaceChildren(); return; }
   if (SETUP.cands === null){ box.replaceChildren(h('div', { class: 'yt-loading' }, h('span', { class: 'spinner' }), 'Finding the song on YouTube…')); return; }
-  const list = rankedCands(k).slice(0, 4);
+  const list = rankedCands(k).slice(0, 3);
   if (SETUP.yt && !list.some(c => c.id === SETUP.yt)) list.unshift({ id: SETUP.yt, title: 'Your YouTube link', channel: '', kind: 'other', duration: 0 });
   if (!list.length){
     box.replaceChildren(h('p', { class: 'hint', text: 'Couldn’t search YouTube automatically right now. Paste a link below (press “Find ↗” to search YouTube).' }));
@@ -639,9 +677,9 @@ $('musicSeg').addEventListener('click', e => { const b = e.target.closest('butto
 $('ytInput').addEventListener('input', () => {
   const id = ytId($('ytInput').value);
   if (!id) return;
-  if (SETUP.music === 'off') SETUP.music = 'video';
-  SETUP.yt = SETUP.custom = SETUP.pick[SETUP.music] = id;
-  renderMusic();
+  SETUP.music = 'audio';
+  SETUP.yt = SETUP.custom = SETUP.pick.audio = id;
+  renderMusic(); renderSetupControls();
 });
 
 $('startBtn').onclick = () => {
@@ -649,32 +687,35 @@ $('startBtn').onclick = () => {
   const raw = $('ytInput').value.trim();
   if (raw && !ytId(raw) && SETUP.music !== 'off'){ toast('That doesn’t look like a YouTube link.'); $('ytManual').open = true; $('ytInput').focus(); return; }
   const yt = SETUP.music === 'off' ? '' : SETUP.yt;
-  if (SETUP.mode === 'listen' && !yt){
-    toast(SETUP.cands === null ? 'Still looking for the song on YouTube… one second.' : 'Listen-along needs music: pick a video or paste a YouTube link.');
-    return;
+  if (SETUP.music !== 'off' && !yt){
+    if (SETUP.cands === null){ toast('Still looking for the song… one second.'); return; }
+    if (!confirm('No music was found for this song. Play without music?')) return;
   }
-  store.set('prefs', { preset: SETUP.preset, mode: SETUP.mode, opts: SETUP.opts, music: SETUP.music });
+  store.set('prefs', { preset: SETUP.preset, mode: SETUP.mode, opts: SETUP.opts, music: SETUP.music, pauseLines: SETUP.pauseLines });
   const { opts } = SETUP;
-  const alts = Array.isArray(SETUP.cands)
-    ? { audio: rankedCands('audio').slice(0, 4).map(c => c.id), video: rankedCands('video').slice(0, 4).map(c => c.id) }
-    : null;
+  const alts = Array.isArray(SETUP.cands) ? rankedCands('audio').slice(0, 4).map(c => c.id) : null;
   startGame({
-    src: song.src, id: song.id || '', title: song.title, artist: song.artist || '', cover: song.cover || '',
+    src: song.src, id: song.id || '', title: song.title, artist: song.artist || '', cover: song.cover || '', duration: song.duration || 0,
     lines: song.lines, times: song.times, preset: SETUP.preset, mode: SETUP.mode,
-    opts: { density: opts.density, minLen: opts.minLen, focus: opts.focus, firstLetter: opts.firstLetter, sizeBoxes: opts.sizeBoxes, skipParens: opts.skipParens, instant: opts.instant },
-    seed: newSeed(), yt, music: yt ? SETUP.music : 'off', ytAlts: alts, offset: SETUP.offset
+    opts: { density: opts.density, minLen: opts.minLen, focus: opts.focus, firstLetter: opts.firstLetter, sizeBoxes: opts.sizeBoxes, skipParens: opts.skipParens, instant: true },
+    seed: newSeed(), yt, music: yt ? 'audio' : 'off', pauseLines: !!(SETUP.pauseLines && yt && song.times), ytAlts: alts, offset: SETUP.offset
   });
 };
 
 // =====================================================================
-// game
+// game: Ready → Try 1, 2, 3… → ❤️ Last chance → final results
+// During a try the song only plays/pauses (no rewinding). Correct words
+// turn green by themselves and stay green in the next tries.
 // =====================================================================
 const G = {
   s: null, parsed: [], gaps: [], lineEls: [], solEls: [], lineGaps: [],
-  seconds: 0, hints: 0, session: '', active: false, done: false, bonus: false, played: false, peeked: false,
-  focus: null, wait: -1, passed: new Set(), cur: -1
+  hints: 0, session: '', active: false, done: false, bonus: false, played: false,
+  focus: null, wait: -1, passed: new Set(), cur: -1, badYt: new Set(),
+  phase: 'ready', tryNo: 1, tries: [], lastChance: false, rewinds: 0, tryStart: null, heard: false, xpTotal: 0
 };
-const filledCount = () => G.gaps.filter(g => g.locked || g.input.value.trim()).length;
+const lockedCount = () => G.gaps.filter(g => g.locked).length;
+const filledCount = lockedCount;
+const REWINDS = 3, REWIND_SECONDS = 20;
 
 function buildPool(parsed){
   const seen = new Set(), pool = [];
@@ -698,7 +739,20 @@ function makeOptions(answer, pool, rand){
   return shuffle([answer, ...picked.map(fix)], rand);
 }
 
+// settings saved by older versions of the app
+function normalizeSettings(s){
+  s = { ...s };
+  if (s.mode === 'listen'){ s.mode = 'type'; s.pauseLines = true; }
+  if (s.mode !== 'choice') s.mode = 'type';
+  if (s.ytAlts && !Array.isArray(s.ytAlts)) s.ytAlts = s.ytAlts.audio || [];
+  s.music = s.yt ? 'audio' : 'off';
+  s.pauseLines = !!(s.pauseLines && s.yt && s.times);
+  s.opts = { ...s.opts, instant: true };
+  return s;
+}
+
 function startGame(s, restore){
+  s = normalizeSettings(s);
   const { parsed, eligible } = parseLines(s.lines, s.opts, s.force);
   if (!eligible.length){ toast('No words to hide with these settings. Try a lower minimum length.'); return false; }
   const rand = rng(s.seed);
@@ -710,14 +764,17 @@ function startGame(s, restore){
   const pool = s.mode === 'choice' ? buildPool(parsed) : null;
 
   destroyPlayer();
+  closeModal(true);
   Object.assign(G, {
     s, parsed, gaps: [], lineEls: [], solEls: [], lineGaps: [],
-    seconds: restore?.seconds || 0, hints: restore?.hints || 0,
+    hints: restore?.hints || 0,
     session: restore?.session || (Date.now().toString(36) + newSeed()),
-    active: true, done: false, bonus: false, played: !!restore?.played, peeked: false,
-    focus: null, wait: -1, passed: new Set(), cur: -1, badYt: new Set()
+    active: true, done: false, bonus: false, played: !!restore?.played,
+    focus: null, wait: -1, passed: new Set(), cur: -1, badYt: new Set(),
+    phase: 'ready', tryNo: restore?.tryNo || 1, tries: restore?.tries || [],
+    lastChance: !!restore?.lastChance, rewinds: restore?.lastChance ? (restore.rewinds ?? REWINDS) : 0,
+    tryStart: null, heard: false, xpTotal: restore?.xpTotal || 0, pendingStart: false, finishing: false
   });
-  s.music ||= s.yt ? 'video' : 'off';
 
   const box = $('lyrics'), solBox = $('solution');
   box.replaceChildren(); solBox.replaceChildren();
@@ -727,13 +784,11 @@ function startGame(s, restore){
     if (!toks){ d.className = sd.className = 'line blank'; }
     else toks.forEach(t => {
       if (!t.gap){ d.append(t.raw + ' '); sd.append(t.raw + ' '); return; }
-      const g = { i: G.gaps.length, line: li, answer: t.core, locked: false, hinted: false, xp: false, wrong: null };
+      const g = { i: G.gaps.length, line: li, answer: t.core, locked: false, hinted: false, xp: false, wrong: null, lockTry: 0 };
       if (s.mode === 'choice') g.options = makeOptions(t.core, pool, rand);
-      // solution view
       if (t.pre) sd.append(t.pre);
       g.sol = h('span', { class: 'sol miss', text: t.core });
       sd.append(g.sol, (t.suf || '') + ' ');
-      // challenge view
       const inp = h('input', { type: 'text', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', autocorrect: 'off', 'aria-label': 'Missing word' });
       const w = s.mode === 'choice' ? Math.max(...g.options.map(o => o.length)) : (s.opts.sizeBoxes ? t.core.length : 8);
       inp.style.width = (Math.max(3, w) + 1.6) + 'ch';
@@ -748,9 +803,9 @@ function startGame(s, restore){
       d.append(h('span', { class: 'gap' }, t.pre || '', inp, (t.suf || '') + ' '));
       G.gaps.push(g); G.lineGaps[li].push(g);
     });
-    if (s.times && s.yt && toks){
-      d.classList.add('seek'); sd.classList.add('seek');
-      const seek = e => { if (e.target.tagName !== 'INPUT') seekLine(li); };
+    if (toks){
+      // after the game you can click any line to jump there in the song
+      const seek = e => { if (G.done && e.target.tagName !== 'INPUT') seekLine(li); };
       d.addEventListener('click', seek); sd.addEventListener('click', seek);
     }
     box.append(d); solBox.append(sd);
@@ -760,28 +815,23 @@ function startGame(s, restore){
   if (restore){
     G.gaps.forEach((g, i) => {
       if (restore.hinted?.[i]) g.hinted = true;
-      if (restore.locked?.[i]){ lockGap(g, true); g.xp = true; }
+      if (restore.locked?.[i]){ lockGap(g, true); g.xp = true; g.lockTry = restore.locked[i]; }
       else if (restore.answers?.[i]) g.input.value = restore.answers[i];
     });
   }
 
-  // header
   $('gameTitle').textContent = s.title;
   $('gameArtist').textContent = [s.artist, PRESET_LABEL[s.preset]].filter(Boolean).join(' · ');
   $('gameCover').replaceChildren(tile(s.title, s.cover, 'md'));
-  $('modePill').textContent = MODE_LABEL[s.mode];
+  $('modePill').textContent = (s.mode === 'choice' ? '🎯 Choose' : '✍️ Type') + (s.pauseLines ? ' · ⏸' : '');
   $('saveSongBtn').classList.toggle('hidden', s.src === 'practice');
   $('shareBtn').classList.toggle('hidden', s.src === 'practice');
   refreshSaveBtn();
-  $('keysHint').textContent = s.mode === 'choice'
-    ? 'Click a gap (or Tab to it) and press 1–4 to choose · Ctrl+Enter → check'
-    : 'Enter/Tab → next gap · ? → hint · Ctrl+Enter → check' + (s.yt ? ' · Alt+1 back 5s · Alt+2 play/pause · Alt+3 replay line' : '');
-  $('contBtn').classList.add('hidden');
-  $('hintBtn').disabled = false;
+  $('keysHint').textContent = (s.mode === 'choice' ? 'Click a gap and press 1–4 to choose' : 'Enter/Tab → next gap · ? → hint')
+    + (s.yt ? ' · Alt+2 → play/pause' : '') + ' · Correct words turn green by themselves.';
 
   setupPlayer(s.yt);
   showTab('challenge');
-  updateProgress();
   showView('game');
   if (!s.cover && s.src !== 'paste' && s.src !== 'practice'){
     findCover(s.title, s.artist).then(url => {
@@ -790,22 +840,221 @@ function startGame(s, restore){
       if (view === 'game') setBackdrop(url);
     });
   }
-  if (s.mode !== 'listen') focusNext(-1);
+  setInputsEnabled(false);
+  updateHud();
   saveProgress();
+  showReady();
   return true;
 }
 
-function updateProgress(){
-  const filled = filledCount(), total = G.gaps.length;
-  const locked = G.gaps.filter(g => g.locked).length;
-  $('progress').textContent = `${locked} correct · ${filled} / ${total} filled`;
-  $('pfill').style.width = (total ? filled / total * 100 : 0) + '%';
+// ---------- HUD ----------
+function updateHud(){
+  const total = G.gaps.length, ok = lockedCount();
+  const playingPhase = G.phase === 'playing';
+  $('progress').textContent = `${ok} / ${total} correct`;
+  $('pfill').style.width = (total ? ok / total * 100 : 0) + '%';
   $('hintVal').textContent = G.hints;
-  $('timerVal').textContent = fmtTime(G.seconds);
+  $('tryPill').textContent = G.done ? '🏁 Finished' : G.lastChance ? '❤️ Last chance' : `🔁 Try ${G.tryNo}`;
+  $('hintBtn').classList.toggle('hidden', !playingPhase);
+  $('endTryBtn').classList.toggle('hidden', !playingPhase);
+  $('contBtn').classList.toggle('hidden', !(playingPhase && G.wait >= 0));
+  // rewind: 3 × 20 s in the last chance, free after the game
+  const canRew = G.done || (playingPhase && G.lastChance);
+  $('rewBtn').classList.toggle('hidden', !canRew);
+  $('npRew').classList.toggle('hidden', !canRew);
+  $('rewBtn').textContent = G.done ? '⟲ 5s' : `⟲ ${REWIND_SECONDS}s (${G.rewinds})`;
+  $('npRew').replaceChildren(G.done ? '⟲5' : `⟲${REWIND_SECONDS}`, G.done ? '' : h('small', { text: '×' + G.rewinds }));
+  $('rewBtn').disabled = $('npRew').disabled = !G.done && G.rewinds <= 0;
+  $('lineBtn').classList.toggle('hidden', !(G.done && G.s.times));
+  $('npProg').classList.toggle('scrub', G.done);
+  $('npLock').textContent = G.done ? 'Free play: tap the bar or any line' : G.lastChance ? `❤️ ${G.rewinds} rewind${G.rewinds === 1 ? '' : 's'} left` : '🔒 No rewinding during a try';
+  $('tabSolution').textContent = G.done ? '👁 Solution' : '🔒 Solution';
+  $('lyrics').classList.toggle('frozen', !playingPhase && !G.done);
+}
+function setInputsEnabled(on){
+  G.gaps.forEach(g => { if (!g.locked && G.s.mode !== 'choice') g.input.readOnly = !on; });
+  if (!on) closeChoice();
 }
 
+// ---------- the try loop ----------
+function triesChips(){
+  const total = G.gaps.length;
+  if (!G.tries.length) return null;
+  return h('div', { class: 'tries' }, G.tries.map(t => h('div', { class: 'try' + (t.last ? ' last' : '') },
+    h('small', { text: t.last ? '❤️ Last chance' : 'Try ' + t.n }),
+    h('b', { text: `${t.correct}/${total}` }),
+    h('div', { class: 'try-bar' }, h('div', { style: `width:${total ? t.correct / total * 100 : 0}%` })))));
+}
+function ringEl(correct, total){
+  const pct = total ? Math.round(correct / total * 100) : 0;
+  return h('div', { class: 'ring', style: `--p:${pct}` }, h('div', null, h('span', { text: `${correct}/${total}` }), h('small', { text: pct + '%' })));
+}
+function showReady(){
+  G.phase = 'ready';
+  setInputsEnabled(false);
+  updateHud();
+  const music = !!G.s.yt, last = G.lastChance;
+  const go = () => { closeModal(true); beginTry(); };
+  openModal({ locked: true },
+    h('div', { class: 'big-emoji', text: last ? '❤️' : music ? '🎧' : '✍️' }),
+    h('h2', { text: last ? 'Last chance' : G.tries.length ? `Ready for try ${G.tryNo}?` : 'Ready?' }),
+    h('p', { class: 'muted', text: last
+      ? `The song starts again. This time you can rewind ${REWIND_SECONDS} seconds ${REWINDS} times. After it, you’ll see your final results.`
+      : music
+        ? `Try ${G.tryNo}: the song plays from the start. You can pause, but you can’t rewind. Correct words turn green by themselves.`
+        : `Try ${G.tryNo}: fill in the gaps. Correct words turn green by themselves. Press “End try” when you’re done.` }),
+    triesChips(),
+    h('div', { class: 'btns' },
+      h('button', { class: 'btn primary big', text: '▶ Ready', onclick: go }),
+      G.tries.length && !last ? h('button', { class: 'btn', text: `❤️ Last chance instead (${REWINDS} × ⟲ ${REWIND_SECONDS} s)`, onclick: () => { G.lastChance = true; G.rewinds = REWINDS; go(); } }) : null,
+      G.tries.length ? h('button', { class: 'btn', text: '🏁 Finish & see the results', onclick: () => { closeModal(true); finishGame(0); } }) : null),
+    h('button', { class: 'link', text: '♪ Choose another song', onclick: () => { closeModal(true); showView('play'); } }));
+}
+
+function beginTry(){
+  if (G.phase === 'playing' || G.done) return;
+  G.phase = 'playing';
+  G.tryStart = { correct: lockedCount(), hints: G.hints };
+  G.passed = new Set(); G.wait = -1; G.cur = -1; G.heard = false;
+  G.gaps.forEach(g => g.input.classList.remove('bad'));
+  setInputsEnabled(true);
+  updateHud();
+  if (G.s.yt){ if (playerReady) startPlayback(); else G.pendingStart = true; }
+  if (G.s.mode !== 'choice' && !G.s.pauseLines) focusNext(-1, true);
+  saveProgress();
+}
+
+function awardXp(){
+  let xp = 0;
+  G.gaps.forEach(g => {
+    if (!g.locked || g.xp) return;
+    g.xp = true;
+    xp += g.hinted ? 2 : g.lockTry === 1 ? 10 : g.lockTry === 2 ? 7 : 5;
+  });
+  G.xpTotal += xp;
+  return xp;
+}
+
+function endTry(){
+  if (G.phase !== 'playing') return;
+  pauseVideo(); closeChoice();
+  if (G.wait >= 0){ G.lineEls[G.wait].classList.remove('wait'); G.wait = -1; }
+  const correct = lockedCount(), total = G.gaps.length;
+  G.tries.push({ n: G.tryNo, correct, hints: G.hints - (G.tryStart?.hints || 0), last: G.lastChance });
+  G.gaps.forEach(g => { if (!g.locked && g.input.value.trim()) flashBad(g); });
+  const xp = awardXp();
+  if (correct === total || G.lastChance){ finishGame(xp); return; }
+
+  const gained = correct - (G.tryStart?.correct || 0);
+  const done = G.tries[G.tries.length - 1];
+  G.tryNo++;
+  G.phase = 'between';
+  setInputsEnabled(false);
+  updateHud();
+  saveProgress();
+  const go = () => { closeModal(true); beginTry(); };
+  openModal({ locked: true },
+    h('h2', { text: `Try ${done.n} finished` }),
+    ringEl(correct, total),
+    h('p', { class: 'muted', text: gained ? `+${gained} new word${gained === 1 ? '' : 's'} this try. Your green words stay for the next one.` : 'No new words this time. Listen carefully and try again!' }),
+    triesChips(),
+    h('div', { class: 'res-stats' },
+      h('span', { class: 'pill', text: `💡 ${G.hints} hint${G.hints === 1 ? '' : 's'}` }),
+      xp ? h('span', { class: 'pill', text: `⭐ +${xp} XP` }) : null),
+    h('p', { class: 'save-note', id: 'saveNote' }),
+    h('div', { class: 'btns' },
+      h('button', { class: 'btn primary', text: `🔁 Play it again · Try ${G.tryNo}`, onclick: go }),
+      h('button', { class: 'btn', text: `❤️ Last chance · ${REWINDS} × ⟲ ${REWIND_SECONDS} s, then final results`, onclick: () => { G.lastChance = true; G.rewinds = REWINDS; go(); } }),
+      h('button', { class: 'btn', text: '🏁 Finish & see the results', onclick: () => { closeModal(true); finishGame(0); } })),
+    h('button', { class: 'link', text: '♪ Choose another song', onclick: () => { closeModal(true); showView('play'); } }));
+  syncAttempt(false, xp);
+}
+
+function finishGame(xpLastTry){
+  if (G.done) return;
+  G.phase = 'done'; G.done = true; G.wait = -1;
+  pauseVideo(); closeChoice();
+  store.del('progress');
+  const total = G.gaps.length, correct = lockedCount(), perfect = correct === total;
+  let bonus = 0;
+  if (perfect && !G.bonus){ G.bonus = true; bonus = (G.tries.length <= 1 ? 50 : 25) + ({ hard: 50, insane: 100 }[G.s.preset] || 0); G.xpTotal += bonus; }
+  if (perfect && !matchMedia('(prefers-reduced-motion: reduce)').matches) confetti();
+  setInputsEnabled(false);
+  G.lineEls.forEach((el, i) => { if (G.s.yt && G.s.times && G.parsed[i]) el.classList.add('seek'); });
+  G.solEls.forEach((el, i) => { if (G.s.yt && G.s.times && G.parsed[i]) el.classList.add('seek'); });
+  updateHud();
+
+  const n = G.tries.length;
+  openModal(
+    h('h2', { text: perfect ? (n <= 1 ? '🏆 Perfect on the first try!' : `🎉 All words in ${n} tries!`) : '🏁 Final results' }),
+    ringEl(correct, total),
+    triesChips(),
+    h('div', { class: 'res-stats' },
+      h('span', { class: 'pill', text: `🔁 ${n} ${n === 1 ? 'try' : 'tries'}` }),
+      h('span', { class: 'pill', text: `💡 ${G.hints} hint${G.hints === 1 ? '' : 's'}` }),
+      G.xpTotal ? h('span', { class: 'pill', text: `⭐ +${G.xpTotal} XP` }) : null),
+    h('p', { class: 'save-note', id: 'saveNote' }),
+    h('div', { class: 'lb hidden', id: 'lbBox' }),
+    h('div', { class: 'btns' },
+      h('button', { class: 'btn primary', text: '👁 See the solution & replay the song', onclick: () => { closeModal(); showTab('solution'); } }),
+      h('button', { class: 'btn', text: '🔁 New game with new gaps', onclick: () => { closeModal(); restart(); } }),
+      h('button', { class: 'btn', text: '♪ Choose another song', onclick: () => { closeModal(); showView('play'); } })));
+  syncAttempt(true, xpLastTry + bonus);
+}
+
+function buildDetail(final){
+  const missed = G.gaps.filter(g => !g.locked);
+  const correct = lockedCount(), total = G.gaps.length;
+  return {
+    title: G.s.title.slice(0, 200), artist: (G.s.artist || '').slice(0, 200), songId: G.s.src === 'lrclib' ? G.s.id : '',
+    correct, total, pct: Math.round(correct / total * 100), mode: G.s.mode, preset: G.s.preset, hints: G.hints,
+    tries: G.tries.length, scores: G.tries.map(t => t.correct).slice(0, 50), lastChance: G.lastChance, finished: final,
+    missed: missed.map(g => g.answer).slice(0, 200),
+    missedPairs: missed.slice(0, 100).map(g => ({ w: g.answer, l: G.s.lines[g.line].slice(0, 300) }))
+  };
+}
+function boardKey(s){
+  if (s.src !== 'lrclib' || s.preset === 'custom') return null;
+  return `${s.id}_${s.preset}_${s.mode === 'choice' ? 'c' : 't'}`;
+}
+async function syncAttempt(final, xp){
+  const note = () => $('saveNote');
+  if (!cloud || !cloud.state.user){
+    if (note()) note().textContent = 'Sign in to save your games, earn XP and join the leaderboard.';
+    return;
+  }
+  const d = buildDetail(final);
+  if (note()) note().textContent = 'Saving…';
+  try {
+    await cloud.saveResult(G.session, d);
+    if (xp > 0) await cloud.addXp(xp);
+    if (final){
+      const key = songKey(G.s), lib = cloud.state.library.get(key);
+      if (lib) await cloud.updateSong(key, { best: Math.max(lib.best || 0, d.pct), plays: (lib.plays || 0) + 1 });
+    }
+    if (note()) note().textContent = '✓ Saved to your stats' + (xp ? ` · +${xp} XP` : '');
+  } catch (e){ console.error(e); if (note()) note().textContent = 'Could not save this game.'; }
+
+  const board = final && boardKey(G.s);
+  if (!board) return;
+  try {
+    if (d.pct > 0) await cloud.submitScore(board, d.pct, d.tries, d.hints);
+    const top = await cloud.topScores(board);
+    const box = $('lbBox');
+    if (!box || !top.length) return;
+    box.replaceChildren(
+      h('h4', { text: `🏆 Leaderboard · ${PRESET_LABEL[G.s.preset]} · ${G.s.mode === 'choice' ? 'Choose' : 'Type'}` }),
+      h('ol', null, top.map(r => h('li', { class: r.me ? 'me' : '' },
+        h('span', { text: r.name + (r.me ? ' (you)' : '') }), h('b', { text: r.pct + '%' }),
+        h('em', { text: r.tries ? `${r.tries} ${r.tries === 1 ? 'try' : 'tries'}` : '' })))));
+    box.classList.remove('hidden');
+  } catch (e){ console.error(e); }
+}
+
+// ---------- typing & choosing ----------
 function lockGap(g, silent){
   g.locked = true;
+  if (!g.lockTry) g.lockTry = G.lastChance ? 9 : G.tryNo;
   g.input.value = g.answer;
   g.input.classList.remove('bad');
   g.input.classList.add('ok');
@@ -815,34 +1064,32 @@ function lockGap(g, silent){
   if (G.choiceFor === g) closeChoice();
 }
 function flashBad(g){ g.input.classList.remove('bad'); void g.input.offsetWidth; g.input.classList.add('bad'); }
-
-function focusNext(from){
+function focusNext(from, noScroll){
   for (let i = from + 1; i < G.gaps.length; i++){
-    if (!G.gaps[i].locked){ G.gaps[i].input.focus({ preventScroll: false }); return true; }
+    if (!G.gaps[i].locked){ G.gaps[i].input.focus({ preventScroll: !!noScroll }); return true; }
   }
   return false;
 }
-
 function onGapInput(g){
+  if (G.phase !== 'playing' || g.locked) return;
   g.input.classList.remove('bad');
-  if (G.s.opts.instant && !g.locked && same(g.input.value.trim(), g.answer)) lockGap(g);
+  if (same(g.input.value.trim(), g.answer)) lockGap(g);
   afterChange(g);
 }
 function afterChange(g){
-  updateProgress();
+  updateHud();
   queueSave();
-  if (G.s.mode === 'listen' && G.wait === g.line && G.lineGaps[g.line].every(x => x.locked)) continueListen();
-  if (G.gaps.every(x => x.locked) && !G.done && !G.finishing){
+  if (G.s.pauseLines && G.wait === g.line && G.lineGaps[g.line].every(x => x.locked)) continueListen();
+  if (G.phase === 'playing' && G.gaps.every(x => x.locked) && !G.finishing){
     G.finishing = true;
-    setTimeout(() => { G.finishing = false; if (!G.done) finishRound(); }, 250);
+    setTimeout(() => { G.finishing = false; endTry(); }, 300);
   }
 }
 function onGapKey(e, g){
   if (e.key === 'Enter'){
     e.preventDefault();
-    if (e.ctrlKey || e.metaKey){ check(); return; }
-    if (G.s.mode === 'listen' && G.wait === g.line && G.lineGaps[g.line].every(x => x.locked || x.input.value.trim())){ continueListen(); return; }
-    if (!focusNext(g.i)) $('checkBtn').focus();
+    if (G.s.pauseLines && G.wait === g.line){ continueListen(); return; }
+    focusNext(g.i);
     return;
   }
   if (e.key === '?'){ e.preventDefault(); hint(g); return; }
@@ -850,13 +1097,13 @@ function onGapKey(e, g){
   if (e.key === 'Escape') closeChoice();
 }
 
-// ---------- multiple choice popover ----------
 function openChoice(g){
+  if (G.phase !== 'playing') return;
   const pop = $('choicePop');
   pop.replaceChildren(...g.options.map((o, i) => {
     const b = h('button', { type: 'button', role: 'option' }, h('kbd', { text: String(i + 1) }), o);
     b.disabled = !!g.wrong?.has(i);
-    b.addEventListener('mousedown', e => e.preventDefault());   // keep focus on the gap
+    b.addEventListener('mousedown', e => e.preventDefault());
     b.onclick = () => pickChoice(g, i);
     return b;
   }));
@@ -869,30 +1116,26 @@ function openChoice(g){
 }
 function closeChoice(){ $('choicePop').classList.add('hidden'); G.choiceFor = null; }
 function pickChoice(g, i){
-  if (g.locked || !g.options[i] || g.wrong?.has(i)) return;
+  if (G.phase !== 'playing' || g.locked || !g.options[i] || g.wrong?.has(i)) return;
   const o = g.options[i];
   g.input.value = o;
-  if (G.s.opts.instant){
-    if (same(o, g.answer)){ lockGap(g); afterChange(g); focusNext(g.i); }
-    else { (g.wrong ||= new Set()).add(i); flashBad(g); openChoice(g); afterChange(g); }
-  } else {
-    closeChoice(); afterChange(g);
-    if (!focusNext(g.i)) $('checkBtn').focus();
-  }
+  if (same(o, g.answer)){ lockGap(g); afterChange(g); focusNext(g.i, true); }
+  else { (g.wrong ||= new Set()).add(i); flashBad(g); openChoice(g); afterChange(g); }
 }
 window.addEventListener('resize', closeChoice);
 document.addEventListener('mousedown', e => {
   if (G.choiceFor && !$('choicePop').contains(e.target) && e.target !== G.choiceFor.input) closeChoice();
 });
 
-// ---------- hints ----------
+// ---------- hints (counted in your stats) ----------
 function hint(g){
+  if (G.phase !== 'playing') return;
   g = g && !g.locked ? g : (G.focus && !G.focus.locked ? G.focus : G.gaps.find(x => !x.locked));
-  if (!g || G.done) return;
+  if (!g) return;
   G.hints++; g.hinted = true;
   if (G.s.mode === 'choice'){
     const wrongIdx = g.options.map((o, i) => i).filter(i => !same(g.options[i], g.answer) && !g.wrong?.has(i));
-    if (wrongIdx.length){ (g.wrong ||= new Set()).add(wrongIdx[0]); }
+    if (wrongIdx.length) (g.wrong ||= new Set()).add(wrongIdx[0]);
     if (wrongIdx.length <= 1){ lockGap(g); afterChange(g); }
     else { g.input.focus(); openChoice(g); }
     toast('💡 One wrong option removed');
@@ -906,118 +1149,22 @@ function hint(g){
     else { g.input.focus(); g.input.setSelectionRange(g.input.value.length, g.input.value.length); }
     afterChange(g);
   }
-  updateProgress();
+  updateHud();
 }
 
-// ---------- check & results ----------
-function check(){
-  if (!G.active) return;
-  closeChoice();
-  showTab('challenge');
-  G.gaps.forEach(g => {
-    if (g.locked) return;
-    const v = g.input.value.trim();
-    if (v && same(v, g.answer)) lockGap(g); else flashBad(g);
-  });
-  updateProgress();
-  finishRound();
-}
-
-function finishRound(){
-  if (!G.active) return;
-  const total = G.gaps.length;
-  const correct = G.gaps.filter(g => g.locked).length;
-  const perfect = correct === total;
-  const pct = Math.round(correct / total * 100);
-  // XP: 10 per word (3 if you used a hint), only once per word + bonus for perfect rounds
-  let xp = 0;
-  G.gaps.forEach(g => { if (g.locked && !g.xp){ g.xp = true; xp += g.hinted ? 3 : 10; } });
-  if (perfect && !G.bonus){ G.bonus = true; xp += 50 + ({ hard: 50, insane: 100 }[G.s.preset] || 0); }
-  if (perfect){
-    G.done = true; store.del('progress');
-    pauseVideo();
-    if (!matchMedia('(prefers-reduced-motion: reduce)').matches) confetti();
-  } else saveProgress();
-
-  const missed = G.gaps.filter(g => !g.locked);
-  const detail = {
-    title: G.s.title.slice(0, 200), artist: (G.s.artist || '').slice(0, 200), songId: G.s.src === 'lrclib' ? G.s.id : '',
-    correct, total, pct, mode: G.s.mode, preset: G.s.preset, seconds: G.seconds, hints: G.hints,
-    missed: missed.map(g => g.answer).slice(0, 200),
-    missedPairs: missed.slice(0, 100).map(g => ({ w: g.answer, l: G.s.lines[g.line].slice(0, 300) }))
-  };
-  showResult(detail, xp, perfect);
-  syncAttempt(detail, xp);
-}
-
-function showResult(d, xp, perfect){
-  const msg = perfect ? (G.hints ? '🎉 All done!' : '🏆 Perfect score!') : d.pct >= 70 ? '🔥 Almost there!' : d.pct >= 40 ? '💪 Good start!' : '🎧 Keep listening!';
-  const mk = (label, cls, fn) => h('button', { class: 'btn ' + cls, text: label, onclick: () => { closeModal(); fn(); } });
-  const btns = perfect
-    ? [mk('🔁 Play again with new gaps', 'primary', restart), mk('♪ Choose another song', '', () => showView('play')), mk('👁 See the solution', '', () => showTab('solution'))]
-    : [mk('✏️ Fix the wrong ones', 'primary', () => { const f = G.gaps.find(g => !g.locked); if (f){ f.input.focus(); f.input.select?.(); f.input.scrollIntoView({ block: 'center', behavior: 'smooth' }); } }),
-       mk('👁 See the solution', '', () => showTab('solution')),
-       mk('↺ Restart with new gaps', '', restart)];
-  openModal(
-    h('h2', { text: msg }),
-    h('div', { class: 'ring', style: `--p:${d.pct}` }, h('div', null, h('span', { text: `${d.correct}/${d.total}` }), h('small', { text: d.pct + '%' }))),
-    h('div', { class: 'res-stats' },
-      h('span', { class: 'pill', text: '⏱ ' + fmtTime(d.seconds) }),
-      h('span', { class: 'pill', text: '💡 ' + d.hints + (d.hints === 1 ? ' hint' : ' hints') }),
-      xp ? h('span', { class: 'pill', text: `⭐ +${xp} XP` }) : null),
-    h('p', { class: 'save-note', id: 'saveNote' }),
-    h('div', { class: 'lb hidden', id: 'lbBox' }),
-    h('div', { class: 'btns' }, btns));
-}
-
-function boardKey(s){
-  if (s.src !== 'lrclib' || s.preset === 'custom') return null;
-  return `${s.id}_${s.preset}_${s.mode === 'choice' ? 'c' : 't'}`;
-}
-
-async function syncAttempt(detail, xp){
-  const note = () => $('saveNote');
-  if (!cloud || !cloud.state.user){
-    if (note()) note().textContent = 'Sign in to save your progress, earn XP and join the leaderboard.';
-    return;
-  }
-  if (note()) note().textContent = 'Saving…';
-  try {
-    await cloud.saveResult(G.session, detail);
-    if (xp > 0) await cloud.addXp(xp);
-    const key = songKey(G.s), lib = cloud.state.library.get(key);
-    if (lib) await cloud.updateSong(key, { best: Math.max(lib.best || 0, detail.pct), plays: (lib.plays || 0) + (G.played ? 0 : 1) });
-    G.played = true;
-    if (note()) note().textContent = '✓ Saved to your stats' + (xp ? ` · +${xp} XP` : '');
-  } catch (e){ console.error(e); if (note()) note().textContent = 'Could not save this result.'; }
-
-  const board = boardKey(G.s);
-  if (!board) return;
-  try {
-    if (!G.peeked && detail.pct > 0) await cloud.submitScore(board, detail.pct, detail.seconds);
-    const top = await cloud.topScores(board);
-    const box = $('lbBox');
-    if (!box || !top.length) return;
-    box.replaceChildren(
-      h('h4', { text: `🏆 Leaderboard · ${PRESET_LABEL[G.s.preset]} · ${G.s.mode === 'choice' ? 'Choose' : 'Type'}` }),
-      h('ol', null, top.map(r => h('li', { class: r.me ? 'me' : '' }, h('span', { text: r.name + (r.me ? ' (you)' : '') }), h('b', { text: r.pct + '%' }), h('em', { text: fmtTime(r.seconds) })))),
-      G.peeked ? h('p', { class: 'hint', text: 'Scores after looking at the solution don’t count for the leaderboard.' }) : null);
-    box.classList.remove('hidden');
-  } catch (e){ console.error(e); }
-}
-
-// ---------- tabs: the solution is a separate view, answers are never erased ----------
+// ---------- tabs: the solution unlocks when the game is over ----------
 function refreshSolution(){
   G.gaps.forEach(g => {
     const attempt = g.input.value.trim();
-    const ok = g.locked || (attempt && same(attempt, g.answer));
+    const ok = g.locked;
     g.sol.className = 'sol ' + (ok ? 'ok' : 'miss');
-    g.sol.title = ok ? 'Correct' : (attempt ? `You wrote: ${attempt}` : 'Left empty');
+    g.sol.title = ok ? `Found in ${g.lockTry === 9 ? 'the last chance' : 'try ' + g.lockTry}` : (attempt ? `You wrote: ${attempt}` : 'Left empty');
   });
 }
 function showTab(name){
   const sol = name === 'solution';
-  if (sol){ refreshSolution(); closeChoice(); if (!G.done) G.peeked = true; }
+  if (sol && !G.done){ toast('🔒 The solution unlocks after your last try.'); return; }
+  if (sol){ refreshSolution(); closeChoice(); }
   $('challengePane').classList.toggle('hidden', sol);
   $('solutionPane').classList.toggle('hidden', !sol);
   $('tabChallenge').classList.toggle('on', !sol);
@@ -1028,22 +1175,16 @@ function showTab(name){
 $('tabChallenge').onclick = () => showTab('challenge');
 $('tabSolution').onclick = () => showTab('solution');
 
-// ---------- timer & autosave ----------
-setInterval(() => {
-  if (!G.active || G.done || view !== 'game' || document.hidden || !$('overlay').classList.contains('hidden')) return;
-  G.seconds++;
-  $('timerVal').textContent = fmtTime(G.seconds);
-  if (G.seconds % 10 === 0) saveProgress();
-}, 1000);
-
+// ---------- autosave ----------
 function saveProgress(){
   if (!G.active || G.done) return;
   store.set('progress', {
-    s: G.s, session: G.session, seconds: G.seconds, hints: G.hints, played: G.played, at: Date.now(),
+    s: G.s, session: G.session, hints: G.hints, played: G.played, at: Date.now(),
+    tryNo: G.tryNo, tries: G.tries, lastChance: G.lastChance, rewinds: G.rewinds, xpTotal: G.xpTotal,
     answers: G.gaps.map(g => g.locked ? '' : g.input.value),
-    locked: G.gaps.map(g => g.locked ? 1 : 0),
+    locked: G.gaps.map(g => g.locked ? (g.lockTry || 1) : 0),
     hinted: G.gaps.map(g => g.hinted ? 1 : 0),
-    filled: filledCount(), total: G.gaps.length
+    filled: lockedCount(), total: G.gaps.length
   });
 }
 let saveT = 0;
@@ -1057,14 +1198,14 @@ function restart(){
   store.del('progress');
   startGame({ ...G.s, seed: newSeed() });
 }
-$('checkBtn').onclick = check;
 $('hintBtn').onclick = () => hint(G.focus);
-$('restartBtn').onclick = () => { if (G.done || confirm('Start over with new random gaps?')) restart(); };
+$('endTryBtn').onclick = () => { if (G.s.yt && !confirm('End this try now? The song stops and you see your score.')) return; endTry(); };
+$('restartBtn').onclick = () => { if (G.done || confirm('Start a new game with new random gaps? Your tries will be lost.')) restart(); };
 $('newBtn').onclick = () => showView('play');
-$('contBtn').onclick = continueListen;
+$('contBtn').onclick = () => continueListen();
 
 // =====================================================================
-// YouTube player + karaoke sync + listen-along
+// audio player (YouTube underneath, our own controls on top)
 // =====================================================================
 let player = null, playerReady = false, pollT = 0, ytPromise = null, playerToken = 0;
 const SPEEDS = [1, 0.75, 0.5];
@@ -1075,65 +1216,53 @@ function loadYT(){
     document.head.append(h('script', { src: 'https://www.youtube.com/iframe_api' }));
   });
 }
-function applyMusicLayout(){
-  const s = G.s, audio = s.music === 'audio';
-  $('gameGrid').classList.toggle('audio', audio);
-  const canSwitch = !!(s.yt && s.ytAlts?.audio?.length && s.ytAlts?.video?.length);
-  $('kindBtn').classList.toggle('hidden', !canSwitch);
-  $('kindBtn').replaceChildren(audio ? '🎬 ' : '🎧 ', h('span', { class: 'lbl', text: audio ? 'Clip' : 'Audio' }));
-  $('kindBtn').title = audio ? 'Switch to the music video' : 'Switch to the audio only';
-}
-$('kindBtn').onclick = () => {
-  const s = G.s, next = s.music === 'audio' ? 'video' : 'audio';
-  const id = s.ytAlts?.[next]?.find(x => !G.badYt.has(x));
-  if (!id || !playerReady) return;
-  (s.offsets ||= {})[s.music] = s.offset || 0;      // each version keeps its own sync offset
-  s.music = next; s.yt = id; s.offset = s.offsets[next] ?? 0;
-  $('offVal').textContent = s.offset.toFixed(1) + 's';
-  const start = s.times && G.cur >= 0 ? Math.max(0, lineTime(G.cur) - 0.5) : 0;
-  player.loadVideoById({ videoId: id, startSeconds: start });
-  G.cur = -2;
-  applyMusicLayout(); queueSave();
-  toast(next === 'audio' ? '🎧 Switched to the audio' : '🎬 Switched to the video clip. Use the sync buttons if the lyrics run early.');
-};
 function onPlayerError(e){
   const s = G.s;
   G.badYt.add(s.yt);
-  const next = (s.ytAlts?.[s.music] || []).find(x => !G.badYt.has(x));
+  const next = (s.ytAlts || []).find(x => !G.badYt.has(x));
   if (next && e.data !== 2){
     s.yt = next;
-    toast('That video can’t be played here. Trying another one…');
+    toast('That upload can’t be played here. Trying another one…');
     player.loadVideoById(next);
+    if (G.phase !== 'playing') setTimeout(pauseVideo, 300);
   } else {
-    toast('This video won’t play here. If you opened the app inside VS Code, use Chrome or Edge instead.');
+    toast('The song won’t play here. If you opened the app inside VS Code, use Chrome or Edge instead.');
   }
 }
+function setPlayIcon(on){ $('playBtn').textContent = on ? '⏸' : '▶'; $('npPlay').textContent = on ? '⏸' : '▶'; }
 
 async function setupPlayer(id){
   const has = !!id;
   $('playerCol').classList.toggle('hidden', !has);
   $('gameGrid').classList.toggle('with-player', has);
-  applyMusicLayout();
   $('mediaCtrls').classList.toggle('hidden', !has);
   $('syncBox').classList.toggle('hidden', !(has && G.s.times));
   $('offVal').textContent = (G.s.offset || 0).toFixed(1) + 's';
-  $('speedBtn').textContent = '1×';
-  $('playBtn').textContent = '▶';
+  $('speedBtn').textContent = $('npSpeed').textContent = '1×';
+  $('npTitle').textContent = G.s.title;
+  $('npArtist').textContent = G.s.artist || '';
+  $('npFill').style.width = '0%';
+  $('npCur').textContent = '0:00'; $('npDur').textContent = G.s.duration ? fmtTime(G.s.duration) : '–:––';
+  setPlayIcon(false);
   if (!has) return;
   const token = ++playerToken;
   $('playerHost').replaceChildren(h('div', { id: 'ytPlayer' }));
   const YT = await loadYT();
-  if (token !== playerToken) return;   // a newer game replaced this player while the API was loading
+  if (token !== playerToken) return;
   player = new YT.Player('ytPlayer', {
     videoId: id, width: '100%', height: '100%',
-    playerVars: { playsinline: 1, rel: 0, modestbranding: 1 },
+    playerVars: { playsinline: 1, rel: 0, modestbranding: 1, controls: 0, disablekb: 1, fs: 0, iv_load_policy: 3 },
     events: {
-      onReady: () => { playerReady = true; },
+      onReady: () => { playerReady = true; if (G.pendingStart){ G.pendingStart = false; startPlayback(); } },
       onError: onPlayerError,
       onStateChange: e => {
-        $('playBtn').textContent = e.data === 1 ? '⏸' : '▶';
-        if (e.data === 1 && G.wait >= 0) continueListen(true);
-        if (e.data === 0 && G.s.mode === 'listen' && !G.done) toast('🎵 Song finished! Press “Check answers”.');
+        setPlayIcon(e.data === 1);
+        if (e.data === 1){
+          if (G.phase !== 'playing' && !G.done){ pauseVideo(); return; }   // music only plays during a try
+          G.heard = true;
+          if (G.wait >= 0) continueListen(true);
+        }
+        if (e.data === 0 && G.phase === 'playing' && G.heard) endTry();    // song finished → try finished
       }
     }
   });
@@ -1147,21 +1276,27 @@ function destroyPlayer(){
   player = null; playerReady = false;
   $('playerHost').replaceChildren();
 }
+function startPlayback(){ try { player.seekTo(0, true); player.playVideo(); } catch {} }
 const playing = () => playerReady && player.getPlayerState?.() === 1;
 function pauseVideo(){ try { if (playerReady) player.pauseVideo(); } catch {} }
 function playVideo(){ try { if (playerReady) player.playVideo(); } catch {} }
 const lineTime = li => G.s.times[li] + (G.s.offset || 0);
 
 function poll(){
-  if (!playerReady || !G.s?.times || !G.active) return;
-  const t = player.getCurrentTime();
+  if (!playerReady || !G.active) return;
+  const t = player.getCurrentTime() || 0, dur = player.getDuration() || 0;
+  if (dur){
+    $('npFill').style.width = Math.min(100, t / dur * 100) + '%';
+    $('npCur').textContent = fmtTime(t);
+    $('npDur').textContent = fmtTime(dur);
+  }
+  if (!G.s?.times) return;
   const times = G.s.times;
   let cur = -1;
   for (let i = 0; i < times.length; i++){ if (lineTime(i) <= t + 0.05) cur = i; else break; }
 
-  // listen-along: pause right before the next line if this one still has gaps to fill
-  // (checks the current line and the one just finished, in case a poll tick was missed)
-  if (G.s.mode === 'listen' && G.wait < 0 && cur >= 0 && player.getPlayerState() === 1){
+  // "pause after each line": stop right before the next line if this one still has gaps
+  if (G.s.pauseLines && G.phase === 'playing' && G.wait < 0 && cur >= 0 && player.getPlayerState() === 1){
     const endOf = i => i + 1 < times.length ? lineTime(i + 1) : lineTime(i) + 6;
     for (const L of [cur - 1, cur]){
       if (L < 0) continue;
@@ -1170,7 +1305,7 @@ function poll(){
         player.pauseVideo();
         G.wait = L;
         G.lineEls[L].classList.add('wait');
-        $('contBtn').classList.remove('hidden');
+        updateHud();
         G.lineGaps[L].find(g => !g.locked)?.input.focus({ preventScroll: true });
         G.lineEls[L].scrollIntoView({ block: 'center', behavior: 'smooth' });
         break;
@@ -1194,48 +1329,55 @@ function poll(){
 function continueListen(fromPlay){
   const L = G.wait;
   if (L < 0){ if (!fromPlay) playVideo(); return; }
-  G.lineGaps[L].forEach(g => {
-    if (g.locked) return;
-    const v = g.input.value.trim();
-    if (v && same(v, g.answer)) lockGap(g); else flashBad(g);
-  });
+  G.lineGaps[L].forEach(g => { if (!g.locked && g.input.value.trim()) flashBad(g); });
   G.passed.add(L);
   G.wait = -1;
   G.lineEls[L].classList.remove('wait');
-  $('contBtn').classList.add('hidden');
-  document.activeElement?.blur?.();
-  updateProgress(); queueSave();
-  if (G.gaps.every(g => g.locked)){ finishRound(); return; }
+  updateHud(); queueSave();
   if (!fromPlay) playVideo();
 }
+function seekTo(t){ if (playerReady){ player.seekTo(Math.max(0, t), true); G.cur = -2; } }
 function seekLine(li){
-  if (!playerReady || !G.s.times) return;
-  G.passed.delete(li);
-  if (G.wait >= 0){ G.lineEls[G.wait].classList.remove('wait'); G.wait = -1; $('contBtn').classList.add('hidden'); }
-  player.seekTo(Math.max(0, lineTime(li) - 0.3), true);
+  if (!playerReady || !G.s.times || !G.done) return;
+  seekTo(lineTime(li) - 0.3);
   playVideo();
 }
-function replayLine(){
+function replayLine(){ if (G.done) seekLine(Math.max(0, G.cur)); }
+function rewind(){
   if (!playerReady) return;
-  if (!G.s.times){ player.seekTo(Math.max(0, player.getCurrentTime() - 5), true); playVideo(); return; }
-  seekLine(G.wait >= 0 ? G.wait : Math.max(0, G.cur));
+  const t = player.getCurrentTime();
+  if (G.done){ seekTo(t - 5); return; }
+  if (G.phase !== 'playing' || !G.lastChance || G.rewinds <= 0) return;
+  G.rewinds--;
+  const to = Math.max(0, t - REWIND_SECONDS);
+  seekTo(to);
+  if (G.s.times) [...G.passed].forEach(L => { if (lineTime(L) >= to - 0.5) G.passed.delete(L); });
+  if (G.wait >= 0){ G.lineEls[G.wait].classList.remove('wait'); G.wait = -1; }
+  playVideo(); updateHud(); queueSave();
+  toast(G.rewinds ? `⟲ ${REWIND_SECONDS} s · ${G.rewinds} rewind${G.rewinds === 1 ? '' : 's'} left` : '⟲ That was your last rewind');
 }
-function rewind(){ if (playerReady){ player.seekTo(Math.max(0, player.getCurrentTime() - 5), true); } }
 function togglePlay(){
   if (!playerReady) return;
+  if (G.phase === 'ready' || G.phase === 'between') return;
   if (G.wait >= 0){ continueListen(); return; }
   playing() ? player.pauseVideo() : player.playVideo();
 }
-$('rewBtn').onclick = rewind;
-$('playBtn').onclick = togglePlay;
-$('lineBtn').onclick = replayLine;
-$('speedBtn').onclick = () => {
+function cycleSpeed(){
   if (!playerReady) return;
-  const cur = player.getPlaybackRate();
-  const next = SPEEDS[(SPEEDS.indexOf(cur) + 1) % SPEEDS.length] || 1;
+  const next = SPEEDS[(SPEEDS.indexOf(player.getPlaybackRate()) + 1) % SPEEDS.length] || 1;
   player.setPlaybackRate(next);
-  $('speedBtn').textContent = next + '×';
-};
+  $('speedBtn').textContent = $('npSpeed').textContent = next + '×';
+}
+$('rewBtn').onclick = $('npRew').onclick = rewind;
+$('playBtn').onclick = $('npPlay').onclick = togglePlay;
+$('speedBtn').onclick = $('npSpeed').onclick = cycleSpeed;
+$('lineBtn').onclick = replayLine;
+$('npProg').addEventListener('click', e => {
+  if (!G.done || !playerReady) return;
+  const r = $('npProg').getBoundingClientRect();
+  seekTo((e.clientX - r.left) / r.width * (player.getDuration() || 0));
+  playVideo();
+});
 function setOffset(v){
   G.s.offset = Math.round(v * 10) / 10;
   $('offVal').textContent = G.s.offset.toFixed(1) + 's';
@@ -1252,14 +1394,15 @@ $('tapSync').onclick = () => {
   toast(`Synced! Lyrics shifted by ${G.s.offset.toFixed(1)} s`);
 };
 
-// global shortcuts
+// debug handle (handy in the browser console): __lgc.G, __lgc.player()
+window.__lgc = { G, player: () => player };
+
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape'){ closeModal(); closeChoice(); $('userMenu').classList.add('hidden'); }
   if (view !== 'game') return;
-  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)){ e.preventDefault(); check(); }
-  if (e.altKey && !e.ctrlKey && ['1', '2', '3'].includes(e.key)){
+  if (e.altKey && !e.ctrlKey && (e.key === '1' || e.key === '2')){
     e.preventDefault();
-    ({ 1: rewind, 2: togglePlay, 3: replayLine })[e.key]();
+    (e.key === '1' ? rewind : togglePlay)();
   }
 });
 
@@ -1268,7 +1411,7 @@ document.addEventListener('keydown', e => {
 // =====================================================================
 function shareUrl(){
   const s = G.s;
-  const p = { p: s.preset, o: s.opts, m: s.mode, sd: s.seed, yt: s.yt || undefined, mu: s.yt ? s.music : undefined, of: s.offset || undefined, t: s.title, a: s.artist };
+  const p = { p: s.preset, o: s.opts, m: s.mode, sd: s.seed, yt: s.yt || undefined, pl: s.pauseLines ? 1 : undefined, of: s.offset || undefined, t: s.title, a: s.artist };
   if (s.src === 'lrclib') p.id = s.id; else p.l = s.lines;
   return location.origin + location.pathname + '#c=' + b64enc(JSON.stringify(p));
 }
@@ -1292,17 +1435,19 @@ async function openShared(){
   } catch { toast('Could not load the shared song.'); return; }
   if (!song.lines.length) return;
   const s = { src: song.src, id: song.id || '', title: p.t || song.title, artist: p.a ?? song.artist, cover: '', lines: song.lines, times: song.times,
-    music: p.yt ? (p.mu || 'video') : 'off',
-    preset: p.o ? (p.p || 'custom') : 'medium', mode: (p.m === 'listen' && !(song.times && p.yt)) ? 'type' : (p.m || 'type'),
+    preset: p.o ? (p.p || 'custom') : 'medium', mode: p.m === 'choice' ? 'choice' : 'type', pauseLines: !!(p.pl || p.m === 'listen'),
     opts: p.o || { ...PRESETS.medium, skipParens: true, instant: true }, seed: p.sd || newSeed(), yt: p.yt || '', offset: p.of || 0 };
-  if (song.src !== 'paste') findCover(song.title, song.artist).then(u => { s.cover = u; });
+  if (song.src !== 'paste') findCover(s.title, s.artist).then(u => { s.cover = u; });
   openModal(
-    h('div', { style: 'font-size:2.6rem' }, '🎵'),
+    h('div', { class: 'big-emoji', text: '🎵' }),
     h('h2', { text: 'You’ve been challenged!' }),
     h('p', { class: 'muted', text: `“${s.title}”${s.artist ? ' by ' + s.artist : ''}` }),
-    h('div', { class: 'res-stats' }, h('span', { class: 'pill', text: PRESET_LABEL[s.preset] || 'Custom' }), h('span', { class: 'pill', text: MODE_LABEL[s.mode] })),
+    h('div', { class: 'res-stats' },
+      h('span', { class: 'pill', text: PRESET_LABEL[s.preset] || 'Custom' }),
+      h('span', { class: 'pill', text: MODE_LABEL[s.mode] }),
+      h('span', { class: 'pill', text: s.yt ? '🎧 With music' : '🔇 No music' })),
     h('div', { class: 'btns' },
-      h('button', { class: 'btn primary', text: 'Start the challenge →', onclick: () => { closeModal(); startGame(s); } }),
+      h('button', { class: 'btn primary', text: 'Accept the challenge →', onclick: () => { closeModal(); startGame(s); } }),
       h('button', { class: 'btn', text: 'Not now', onclick: closeModal })));
 }
 
@@ -1330,12 +1475,20 @@ $('printBtn').onclick = () => {
 // =====================================================================
 // modal, confetti
 // =====================================================================
+// openModal({ locked: true }, ...nodes) → can't be closed with Esc / clicking outside
+let modalLocked = false;
 function openModal(...nodes){
+  const opts = nodes[0] && !nodes[0].nodeType && typeof nodes[0] === 'object' ? nodes.shift() : {};
+  modalLocked = !!opts.locked;
   $('modal').replaceChildren(...nodes);
   $('overlay').classList.remove('hidden');
   $('modal').querySelector('button')?.focus();
 }
-function closeModal(){ $('overlay').classList.add('hidden'); }
+function closeModal(force){
+  if (modalLocked && force !== true) return;
+  modalLocked = false;
+  $('overlay').classList.add('hidden');
+}
 $('overlay').addEventListener('click', e => { if (e.target === $('overlay')) closeModal(); });
 
 function confetti(){
@@ -1492,6 +1645,9 @@ function renderStats(){
   const lo = xpForLevel(lvl), hi = xpForLevel(lvl + 1);
   const avg = results.length ? Math.round(results.reduce((a, r) => a + (r.pct || 0), 0) / results.length) : 0;
   const perfects = results.filter(r => r.pct === 100).length;
+  const withTries = results.filter(r => r.tries);
+  const avgTries = withTries.length ? (withTries.reduce((a, r) => a + r.tries, 0) / withTries.length).toFixed(1) : '–';
+  const totalHints = results.reduce((a, r) => a + (r.hints || 0), 0);
 
   // most-missed words
   const counts = new Map();
@@ -1504,26 +1660,45 @@ function renderStats(){
       h('div', { class: 'grow' },
         h('b', { text: `${xp} XP` }), h('span', { class: 'muted small', text: ` · ${hi - xp} XP to level ${lvl + 1}` }),
         h('div', { class: 'xpbar' }, h('div', { style: `width:${Math.min(100, (xp - lo) / (hi - lo) * 100)}%` })))),
-    h('div', { class: 'kpis' },
+    h('div', { class: 'kpis six' },
       kpi('🔥 ' + liveStreak(p), 'day streak'),
-      kpi(String(results.length), 'challenges played'),
-      kpi(avg + '%', 'average accuracy'),
-      kpi(String(perfects), 'perfect scores')),
+      kpi(String(results.length), 'games played'),
+      kpi(avg + '%', 'average score'),
+      kpi(String(perfects), 'perfect games'),
+      kpi(String(avgTries), 'tries per game'),
+      kpi('💡 ' + totalHints, 'hints used')),
     h('div', { class: 'stats-grid' },
-      h('div', { class: 'card chart' }, h('h3', { text: 'Accuracy, last 20 challenges' }), results.length ? chart(results.slice(0, 20).reverse()) : h('p', { class: 'muted', text: 'Play a song to see your chart.' })),
+      h('div', { class: 'card chart' }, h('h3', { text: 'Score, last 20 games' }), results.length ? chart(results.slice(0, 20).reverse()) : h('p', { class: 'muted', text: 'Play a song to see your chart.' })),
       h('div', { class: 'card' },
         h('h3', { text: 'Words you miss most' }),
         top.length ? h('div', { class: 'words' }, top.map(([w, n]) => h('span', { class: 'word' }, w, n > 1 ? h('small', { text: '×' + n }) : null)))
                    : h('p', { class: 'muted', text: 'No mistakes yet. Impressive!' }),
         h('button', { class: 'btn primary full', text: '🎯 Practise my mistakes', disabled: !top.length, onclick: startPractice }))),
     h('div', { class: 'card', style: 'margin-top:12px' },
-      h('h3', { text: 'Recent challenges' }),
-      results.length ? h('ul', { class: 'recent' }, results.slice(0, 12).map(r => h('li', null,
-        h('span', { class: 't', text: r.title + (r.artist ? ' · ' + r.artist : '') }),
-        r.preset ? h('span', { class: 'badge', text: (PRESET_LABEL[r.preset] || r.preset).toUpperCase() }) : null,
-        h('span', { class: 'p', text: r.pct + '%' }),
-        h('span', { class: 'd', text: timeAgo(toDate(r.updatedAt)) }))))
-      : h('p', { class: 'muted', text: 'Nothing yet. Your results appear here after you press “Check answers”.' })));
+      h('div', { class: 'card-head' }, h('h3', { text: 'Your last games' }), h('span', { class: 'muted small', text: '🔒 Only you can see this' })),
+      results.length ? h('ul', { class: 'games' }, results.slice(0, 20).map(gameRow))
+      : h('p', { class: 'muted', text: 'Nothing yet. Your games appear here after your first try.' })));
+}
+// one row per game: song, level, score after each try, hints, last chance
+function gameRow(r){
+  const total = r.total || 0;
+  const scores = r.scores?.length ? r.scores : [r.correct];
+  return h('li', null,
+    h('div', { class: 'g-top' },
+      h('span', { class: 't', text: r.title + (r.artist ? ' · ' + r.artist : '') }),
+      h('span', { class: 'p', text: r.pct + '%' })),
+    h('div', { class: 'g-tries' },
+      scores.map((c, i) => [
+        i ? h('span', { class: 'arrow', text: '→' }) : null,
+        h('span', { class: 'chip-s' + (r.lastChance && i === scores.length - 1 ? ' last' : ''), title: r.lastChance && i === scores.length - 1 ? 'Last chance' : `Try ${i + 1}` },
+          (r.lastChance && i === scores.length - 1 ? '❤️ ' : '') + `${c}/${total}`)])),
+    h('div', { class: 'g-meta' },
+      r.preset ? h('span', { class: 'badge', text: (PRESET_LABEL[r.preset] || r.preset).toUpperCase() }) : null,
+      r.mode ? h('span', { class: 'badge', text: r.mode === 'choice' ? 'CHOOSE' : 'TYPE' }) : null,
+      h('span', { class: 'badge', text: `${r.tries || 1} ${(r.tries || 1) === 1 ? 'TRY' : 'TRIES'}` }),
+      h('span', { class: 'badge', text: `💡 ${r.hints || 0}` }),
+      r.tries && r.finished === false ? h('span', { class: 'badge', text: 'UNFINISHED' }) : null,
+      h('span', { class: 'd', text: timeAgo(toDate(r.updatedAt)) })));
 }
 const kpi = (v, l) => h('div', { class: 'card kpi' }, h('div', { class: 'v', text: v }), h('div', { class: 'l', text: l }));
 function chart(rs){

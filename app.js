@@ -689,7 +689,9 @@ $('startBtn').onclick = () => {
   const yt = SETUP.music === 'off' ? '' : SETUP.yt;
   if (SETUP.music !== 'off' && !yt){
     if (SETUP.cands === null){ toast('Still looking for the song… one second.'); return; }
-    if (!confirm('No music was found for this song. Play without music?')) return;
+    toast('No music found for this song: choose “🔇 No music” or paste a YouTube link.');
+    $('ytManual').open = true;
+    return;
   }
   store.set('prefs', { preset: SETUP.preset, mode: SETUP.mode, opts: SETUP.opts, music: SETUP.music, pauseLines: SETUP.pauseLines });
   const { opts } = SETUP;
@@ -1199,8 +1201,25 @@ function restart(){
   startGame({ ...G.s, seed: newSeed() });
 }
 $('hintBtn').onclick = () => hint(G.focus);
-$('endTryBtn').onclick = () => { if (G.s.yt && !confirm('End this try now? The song stops and you see your score.')) return; endTry(); };
-$('restartBtn').onclick = () => { if (G.done || confirm('Start a new game with new random gaps? Your tries will be lost.')) restart(); };
+// In-app "are you sure?" window. (The browser's own confirm() pop-up can get silently
+// blocked by Chrome after a few uses, which made "End try" look like it did nothing.)
+function askConfirm(title, text, okLabel, onOk){
+  openModal(
+    h('h2', { text: title }),
+    h('p', { class: 'muted', text }),
+    h('div', { class: 'btns' },
+      h('button', { class: 'btn primary', text: okLabel, onclick: () => { closeModal(); onOk(); } }),
+      h('button', { class: 'btn', text: 'Cancel', onclick: () => closeModal() })));
+}
+$('endTryBtn').onclick = () => {
+  if (G.phase !== 'playing') return;
+  if (!G.s.yt){ endTry(); return; }
+  askConfirm(`End ${G.lastChance ? 'your last chance' : 'try ' + G.tryNo} now?`, 'The song stops and you see your score.', '🏁 End try', endTry);
+};
+$('restartBtn').onclick = () => {
+  if (G.done){ restart(); return; }
+  askConfirm('Start a new game?', 'You get new random gaps and your tries for this game are lost.', '↺ New game', restart);
+};
 $('newBtn').onclick = () => showView('play');
 $('contBtn').onclick = () => continueListen();
 
@@ -1208,7 +1227,6 @@ $('contBtn').onclick = () => continueListen();
 // audio player (YouTube underneath, our own controls on top)
 // =====================================================================
 let player = null, playerReady = false, pollT = 0, ytPromise = null, playerToken = 0;
-const SPEEDS = [1, 0.75, 0.5];
 function loadYT(){
   if (window.YT?.Player) return Promise.resolve(window.YT);
   return ytPromise ||= new Promise(res => {
@@ -1238,7 +1256,6 @@ async function setupPlayer(id){
   $('mediaCtrls').classList.toggle('hidden', !has);
   $('syncBox').classList.toggle('hidden', !(has && G.s.times));
   $('offVal').textContent = (G.s.offset || 0).toFixed(1) + 's';
-  $('speedBtn').textContent = $('npSpeed').textContent = '1×';
   $('npTitle').textContent = G.s.title;
   $('npArtist').textContent = G.s.artist || '';
   $('npFill').style.width = '0%';
@@ -1362,15 +1379,8 @@ function togglePlay(){
   if (G.wait >= 0){ continueListen(); return; }
   playing() ? player.pauseVideo() : player.playVideo();
 }
-function cycleSpeed(){
-  if (!playerReady) return;
-  const next = SPEEDS[(SPEEDS.indexOf(player.getPlaybackRate()) + 1) % SPEEDS.length] || 1;
-  player.setPlaybackRate(next);
-  $('speedBtn').textContent = $('npSpeed').textContent = next + '×';
-}
 $('rewBtn').onclick = $('npRew').onclick = rewind;
 $('playBtn').onclick = $('npPlay').onclick = togglePlay;
-$('speedBtn').onclick = $('npSpeed').onclick = cycleSpeed;
 $('lineBtn').onclick = replayLine;
 $('npProg').addEventListener('click', e => {
   if (!G.done || !playerReady) return;
@@ -1566,7 +1576,13 @@ function refreshSaveBtn(){
   b.textContent = saved ? '♥' : '♡';
   b.classList.toggle('saved', saved);
   b.title = saved ? 'Saved in your library (click to remove)' : 'Save to your library';
+  const np = $('npHeart');
+  np.textContent = saved ? '♥' : '♡';
+  np.title = b.title;
+  np.classList.toggle('saved', saved);
+  np.classList.toggle('hidden', G.s?.src === 'practice');
 }
+$('npHeart').onclick = () => $('saveSongBtn').click();
 $('saveSongBtn').onclick = async () => {
   if (!signedIn()){ toast('Sign in to save songs to your library.'); doSignIn(); return; }
   const s = G.s, key = songKey(s);
@@ -1623,7 +1639,7 @@ function libCard(it){
     h('div', { class: 'lib-actions' },
       h('button', { class: 'btn primary small', text: '▶ Play', onclick: () => playFromLibrary(it) }),
       h('button', { class: 'btn small', title: 'Remove from library', 'aria-label': 'Remove from library', text: '🗑',
-        onclick: () => { if (confirm(`Remove “${it.title}” from your library?`)) cloud.removeSong(it.key).catch(console.error); } })));
+        onclick: () => askConfirm('Remove this song?', `“${it.title}” will be removed from your library.`, '🗑 Remove', () => cloud.removeSong(it.key).catch(console.error)) })));
 }
 async function playFromLibrary(it){
   let song;

@@ -477,6 +477,7 @@ function openSetup(song, extra = {}){
   SETUP.preset = prefs.preset || 'medium';
   SETUP.mode = prefs.mode === 'choice' ? 'choice' : 'type';
   SETUP.pauseLines = !!prefs.pauseLines || prefs.mode === 'listen';
+  SETUP.oneShot = !!prefs.oneShot;
   SETUP.opts = { ...PRESETS.medium, skipParens: true, ...(prefs.opts || {}), instant: true };
   if (SETUP.preset !== 'custom') Object.assign(SETUP.opts, PRESETS[SETUP.preset]);
 
@@ -522,11 +523,23 @@ function renderSetupControls(){
   $('optParens').checked = !!o.skipParens;
   // "pause after each line" needs timed lyrics + music
   const canPause = !!(SETUP.song?.times && SETUP.music !== 'off');
+  $('oneShotRow').classList.toggle('hidden', SETUP.mode !== 'choice');
+  $('optOneShot').checked = !!SETUP.oneShot;
   $('optPause').disabled = !canPause;
   $('optPause').checked = canPause && SETUP.pauseLines;
   $('pauseNote').textContent = !SETUP.song?.times ? '(needs synced lyrics ⏱)' : SETUP.music === 'off' ? '(needs music)' : '(easier: the song waits for you)';
 }
 $('optPause').onchange = e => { SETUP.pauseLines = e.target.checked; };
+$('optOneShot').onchange = e => { SETUP.oneShot = e.target.checked; };
+$('readLyricsBtn').onclick = () => {
+  const song = SETUP.song;
+  openModal(
+    h('h2', { text: '📖 ' + song.title }),
+    h('p', { class: 'muted', text: song.artist || '' }),
+    h('div', { class: 'read-lyrics' }, song.lines.map(l => l ? h('div', { text: l }) : h('div', { class: 'gap-line' }))),
+    h('p', { class: 'hint', text: 'Tip: select any words to translate them once the game starts (🌍).' }),
+    h('div', { class: 'btns' }, h('button', { class: 'btn primary', text: 'Got it, close', onclick: () => closeModal() })));
+};
 $('presetSeg').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   SETUP.preset = b.dataset.p; Object.assign(SETUP.opts, PRESETS[SETUP.preset]); renderSetupControls();
@@ -700,14 +713,14 @@ $('startBtn').onclick = () => {
     $('ytManual').open = true;
     return;
   }
-  store.set('prefs', { preset: SETUP.preset, mode: SETUP.mode, opts: SETUP.opts, music: SETUP.music, pauseLines: SETUP.pauseLines });
+  store.set('prefs', { preset: SETUP.preset, mode: SETUP.mode, opts: SETUP.opts, music: SETUP.music, pauseLines: SETUP.pauseLines, oneShot: SETUP.oneShot });
   const { opts } = SETUP;
   const alts = Array.isArray(SETUP.cands) ? rankedCands('audio').slice(0, 4).map(c => c.id) : null;
   startGame({
     src: song.src, id: song.id || '', title: song.title, artist: song.artist || '', cover: song.cover || '', duration: song.duration || 0,
     lines: song.lines, times: song.times, preset: SETUP.preset, mode: SETUP.mode,
     opts: { density: opts.density, minLen: opts.minLen, focus: opts.focus, firstLetter: opts.firstLetter, sizeBoxes: opts.sizeBoxes, skipParens: opts.skipParens, instant: true },
-    seed: newSeed(), yt, music: yt ? 'audio' : 'off', pauseLines: !!(SETUP.pauseLines && yt && song.times), ytAlts: alts, offset: SETUP.offset
+    seed: newSeed(), yt, music: yt ? 'audio' : 'off', pauseLines: !!(SETUP.pauseLines && yt && song.times), oneShot: SETUP.mode === 'choice' && SETUP.oneShot, ytAlts: alts, offset: SETUP.offset
   });
 };
 
@@ -757,12 +770,36 @@ function normalizeSettings(s){
   s.music = s.yt ? 'audio' : 'off';
   s.pauseLines = !!(s.pauseLines && s.yt && s.times);
   s.opts = { ...s.opts, instant: true };
+  s.oneShot = !!(s.oneShot && s.mode === 'choice');
   return s;
 }
 
+// Group lines that say the same thing (a chorus sung 3 times, or almost the same line)
+// so a word is hidden in only ONE of the copies: it counts once and can't be copied
+// from a copy you haven't heard yet (future lines are blurred while the song plays).
+function lineFamilies(parsed){
+  const fam = new Array(parsed.length).fill(-1), reps = [];
+  parsed.forEach((toks, li) => {
+    if (!toks) return;
+    const set = new Set(toks.map(t => t.core ? norm(t.core) : '').filter(Boolean));
+    if (set.size >= 2){
+      for (const r of reps){
+        const inter = [...set].filter(w => r.set.has(w)).length;
+        if (inter / new Set([...set, ...r.set]).size >= 0.6){ fam[li] = r.id; return; }
+      }
+    }
+    reps.push({ id: reps.length, set });
+    fam[li] = reps.length - 1;
+  });
+  return fam;
+}
+
 // Spread the gaps evenly: every line gets one gap before any line gets a second,
-// and gaps on the same line avoid sitting next to each other when possible.
-function pickSpread(eligible, n, rand){
+// gaps on the same line avoid sitting next to each other, and a word is never
+// hidden twice in repeated lines (see lineFamilies).
+function pickSpread(eligible, n, rand, parsed){
+  const fam = lineFamilies(parsed);
+  const used = new Map();                       // family → words already hidden in it
   const byLine = new Map();
   eligible.forEach(t => { if (!byLine.has(t.line)) byLine.set(t.line, []); byLine.get(t.line).push(t); });
   const lines = [...byLine.values()].map(arr => shuffle(arr, rand));
@@ -771,11 +808,14 @@ function pickSpread(eligible, n, rand){
     let progress = false;
     for (const arr of shuffle([...lines], rand)){
       if (left <= 0) break;
-      const free = arr.filter(t => !t.gap);
+      const f = fam[arr[0].line];
+      if (!used.has(f)) used.set(f, new Set());
+      const taken = used.get(f);
+      const free = arr.filter(t => !t.gap && !taken.has(norm(t.core)));
       if (!free.length) continue;
-      const taken = arr.filter(t => t.gap).map(t => t.pos);
-      const pick = free.find(t => !taken.some(p => Math.abs(p - t.pos) <= 1)) || free[0];
-      pick.gap = true; left--; progress = true;
+      const near = arr.filter(t => t.gap).map(t => t.pos);
+      const pick = free.find(t => !near.some(p => Math.abs(p - t.pos) <= 1)) || free[0];
+      pick.gap = true; taken.add(norm(pick.core)); left--; progress = true;
     }
     if (!progress) break;
   }
@@ -789,7 +829,7 @@ function startGame(s, restore){
   if (s.force) eligible.forEach(t => t.gap = true);
   else {
     const n = Math.max(1, Math.round(eligible.length * s.opts.density / 100));
-    pickSpread(eligible, n, rand);
+    pickSpread(eligible, n, rand, parsed);
   }
   const pool = s.mode === 'choice' ? buildPool(parsed) : null;
 
@@ -823,7 +863,7 @@ function startGame(s, restore){
       const w = s.mode === 'choice' ? Math.max(...g.options.map(o => o.length)) : (s.opts.sizeBoxes ? t.core.length : 8);
       inp.style.width = (Math.max(3, w) + 1.6) + 'ch';
       if (s.opts.firstLetter) inp.placeholder = t.core[0];
-      if (s.mode === 'choice'){ inp.readOnly = true; inp.classList.add('choice'); if (!s.opts.firstLetter) inp.placeholder = '▾'; }
+      if (s.mode === 'choice'){ inp.readOnly = true; inp.setAttribute('inputmode', 'none'); inp.classList.add('choice'); if (!s.opts.firstLetter) inp.placeholder = '▾'; }
       g.input = inp;
       inp.addEventListener('focus', () => { G.focus = g; if (s.mode === 'choice' && !g.locked) openChoice(g); });
       inp.addEventListener('click', () => { if (s.mode === 'choice' && !g.locked) openChoice(g); });
@@ -849,11 +889,17 @@ function startGame(s, restore){
       else if (restore.answers?.[i]) g.input.value = restore.answers[i];
     });
   }
+  G.reach = restore?.reach ?? -1;
+  G.optionsDone = s.mode !== 'choice';
+  G.optionsReady = s.mode === 'choice'
+    ? Promise.race([upgradeOptions(), new Promise(r => setTimeout(r, 6000))]).then(() => { G.optionsDone = true; })
+    : null;
+  applyReach();
 
   $('gameTitle').textContent = s.title;
   $('gameArtist').textContent = [s.artist, PRESET_LABEL[s.preset]].filter(Boolean).join(' · ');
   $('gameCover').replaceChildren(tile(s.title, s.cover, 'md'));
-  $('modePill').textContent = (s.mode === 'choice' ? '🎯 Choose' : '✍️ Type') + (s.pauseLines ? ' · ⏸' : '');
+  $('modePill').textContent = (s.mode === 'choice' ? '🎯 Choose' : '✍️ Type') + (s.oneShot ? ' · ⚡' : '') + (s.pauseLines ? ' · ⏸' : '');
   $('saveSongBtn').classList.toggle('hidden', s.src === 'practice');
   $('shareBtn').classList.toggle('hidden', s.src === 'practice');
   refreshSaveBtn();
@@ -902,8 +948,65 @@ function updateHud(){
   $('lyrics').classList.toggle('frozen', !playingPhase && !G.done);
 }
 function setInputsEnabled(on){
-  G.gaps.forEach(g => { if (!g.locked && G.s.mode !== 'choice') g.input.readOnly = !on; });
+  G.inputsOn = on;
+  G.gaps.forEach(g => { if (!g.locked && G.s.mode !== 'choice') g.input.readOnly = !on || g.dead || isFuture(g.line); });
   if (!on) closeChoice();
+}
+
+// ---------- anti-cheat: lines unlock when the song reaches them ----------
+// Only with music + synced lyrics. You can see/type up to the next line; later lines
+// are blurred so you can't read ahead (or copy from a chorus you haven't heard yet).
+const locking = () => !!(G.s?.yt && G.s?.times) && !G.done;
+function unlockedUntil(){
+  let i = G.reach + 1;
+  while (i < G.parsed.length && !G.parsed[i]) i++;   // skip empty lines
+  return Math.max(i, 0);
+}
+const isFuture = li => locking() && li > unlockedUntil();
+function applyReach(){
+  const lock = locking(), until = unlockedUntil();
+  G.lineEls.forEach((el, li) => el.classList.toggle('future', lock && li > until));
+  if (G.inputsOn) G.gaps.forEach(g => { if (!g.locked && G.s.mode !== 'choice') g.input.readOnly = g.dead || (lock && g.line > until); });
+}
+
+// ---------- multiple choice: tricky options that SOUND like the answer ----------
+// Datamuse (free, no key) gives words that sound alike ("night" → knight, knit…).
+// Picks are sorted deterministically so everyone with the same link gets the same options.
+const soundCache = new Map();
+async function soundAlikes(word){
+  const w = word.toLowerCase();
+  if (!/^[a-z]{2,}$/.test(w)) return [];
+  if (soundCache.has(w)) return soundCache.get(w);
+  let out = [];
+  try {
+    const r = await fetch(`https://api.datamuse.com/words?sl=${encodeURIComponent(w)}&max=40&md=f`, { signal: timeoutSignal(5000) });
+    const list = r.ok ? await r.json() : [];
+    const plural = x => x === w + 's' || x === w + 'es' || w === x + 's' || w === x + 'es';
+    out = list
+      .map(x => ({ word: x.word, score: x.score || 0, f: parseFloat((x.tags || []).find(t => t.startsWith('f:'))?.slice(2) || '0') }))
+      .filter(x => /^[a-z]+$/.test(x.word) && x.word !== w && !plural(x.word) && x.f >= 0.5)
+      .sort((a, b) => (b.score - a.score) || (b.f - a.f) || a.word.localeCompare(b.word))
+      .map(x => x.word);
+  } catch {}
+  soundCache.set(w, out);
+  return out;
+}
+async function upgradeOptions(){
+  const s = G.s, gaps = G.gaps.filter(g => !g.locked);
+  const answers = [...new Set(gaps.map(g => g.answer.toLowerCase()))].slice(0, 120);
+  const queue = [...answers];
+  await Promise.all(Array.from({ length: 6 }, async () => { while (queue.length) await soundAlikes(queue.shift()); }));
+  if (G.s !== s || G.phase === 'playing') return;   // never change the options in the middle of a try
+  gaps.forEach(g => {
+    const alike = (soundCache.get(g.answer.toLowerCase()) || []).slice(0, 3);
+    if (!alike.length) return;                       // keep the song-word options
+    const cap = /^\p{Lu}/u.test(g.answer);
+    const fix = w => cap ? w[0].toUpperCase() + w.slice(1) : w;
+    const fill = g.options.filter(o => !same(o, g.answer) && !alike.some(a => same(a, o)));
+    const opts = [g.answer, ...alike.map(fix), ...fill].slice(0, 4);
+    g.options = shuffle(opts, rng(s.seed + '|' + g.i));
+    g.input.style.width = (Math.max(3, ...g.options.map(o => o.length)) + 1.6) + 'ch';
+  });
 }
 
 // ---------- the try loop ----------
@@ -925,6 +1028,11 @@ function showReady(){
   updateHud();
   const music = !!G.s.yt, last = G.lastChance;
   const go = () => { closeModal(true); beginTry(); };
+  const readyBtn = h('button', { class: 'btn primary big', text: '▶ Ready', onclick: go });
+  if (G.optionsReady && !G.optionsDone){
+    readyBtn.disabled = true; readyBtn.textContent = '⏳ Preparing tricky options…';
+    G.optionsReady.then(() => { readyBtn.disabled = false; readyBtn.textContent = '▶ Ready'; });
+  }
   openModal({ locked: true },
     h('div', { class: 'big-emoji', text: last ? '❤️' : music ? '🎧' : '✍️' }),
     h('h2', { text: last ? 'Last chance' : G.tries.length ? `Ready for try ${G.tryNo}?` : 'Ready?' }),
@@ -933,9 +1041,11 @@ function showReady(){
       : music
         ? `Try ${G.tryNo}: the song plays from the start. You can pause, but you can’t rewind. Correct words turn green by themselves.`
         : `Try ${G.tryNo}: fill in the gaps. Correct words turn green by themselves. Press “End try” when you’re done.` }),
+    locking() && G.tryNo === 1 && !G.tries.length ? h('p', { class: 'hint', text: '🔒 Lines unlock as the song reaches them. Once a line has played, you can always go back to it.' }) : null,
+    G.s.oneShot ? h('p', { class: 'hint', text: '⚡ One shot: a wrong pick is final for this try.' }) : null,
     triesChips(),
     h('div', { class: 'btns' },
-      h('button', { class: 'btn primary big', text: '▶ Ready', onclick: go }),
+      readyBtn,
       G.tries.length && !last ? h('button', { class: 'btn', text: `❤️ Last chance instead (${REWINDS} × ⟲ ${REWIND_SECONDS} s)`, onclick: () => { G.lastChance = true; G.rewinds = REWINDS; go(); } }) : null,
       G.tries.length ? h('button', { class: 'btn', text: '🏁 Finish & see the results', onclick: () => { closeModal(true); finishGame(0); } }) : null),
     h('button', { class: 'link', text: '♪ Choose another song', onclick: () => { closeModal(true); showView('play'); } }));
@@ -946,7 +1056,10 @@ function beginTry(){
   G.phase = 'playing';
   G.tryStart = { correct: lockedCount(), hints: G.hints };
   G.passed = new Set(); G.wait = -1; G.cur = -1; G.heard = false;
-  G.gaps.forEach(g => g.input.classList.remove('bad'));
+  G.gaps.forEach(g => {
+    g.input.classList.remove('bad');
+    if (g.dead){ g.dead = false; g.wrong = null; g.input.value = ''; g.input.classList.remove('dead'); }   // one-shot gaps get a new chance each try
+  });
   setInputsEnabled(true);
   updateHud();
   if (G.s.yt){ if (playerReady) startPlayback(); else G.pendingStart = true; }
@@ -1010,6 +1123,7 @@ function finishGame(xpLastTry){
   if (perfect && !G.bonus){ G.bonus = true; bonus = (G.tries.length <= 1 ? 50 : 25) + ({ hard: 50, insane: 100 }[G.s.preset] || 0); G.xpTotal += bonus; }
   if (perfect && !matchMedia('(prefers-reduced-motion: reduce)').matches) confetti();
   setInputsEnabled(false);
+  applyReach();   // game over → nothing is blurred any more
   G.lineEls.forEach((el, i) => { if (G.s.yt && G.s.times && G.parsed[i]) el.classList.add('seek'); });
   G.solEls.forEach((el, i) => { if (G.s.yt && G.s.times && G.parsed[i]) el.classList.add('seek'); });
   updateHud();
@@ -1094,14 +1208,15 @@ function lockGap(g, silent){
   if (G.choiceFor === g) closeChoice();
 }
 function flashBad(g){ g.input.classList.remove('bad'); void g.input.offsetWidth; g.input.classList.add('bad'); }
+const playable = g => !g.locked && !g.dead && !isFuture(g.line);
 function focusNext(from, noScroll){
   for (let i = from + 1; i < G.gaps.length; i++){
-    if (!G.gaps[i].locked){ G.gaps[i].input.focus({ preventScroll: !!noScroll }); return true; }
+    if (playable(G.gaps[i])){ G.gaps[i].input.focus({ preventScroll: !!noScroll }); return true; }
   }
   return false;
 }
 function onGapInput(g){
-  if (G.phase !== 'playing' || g.locked) return;
+  if (G.phase !== 'playing' || !playable(g)) return;
   g.input.classList.remove('bad');
   if (same(g.input.value.trim(), g.answer)) lockGap(g);
   afterChange(g);
@@ -1110,7 +1225,7 @@ function afterChange(g){
   updateHud();
   queueSave();
   if (G.s.pauseLines && G.wait === g.line && G.lineGaps[g.line].every(x => x.locked)) continueListen();
-  if (G.phase === 'playing' && G.gaps.every(x => x.locked) && !G.finishing){
+  if (G.phase === 'playing' && G.gaps.every(x => x.locked || x.dead) && !G.finishing){
     G.finishing = true;
     setTimeout(() => { G.finishing = false; endTry(); }, 300);
   }
@@ -1128,7 +1243,7 @@ function onGapKey(e, g){
 }
 
 function openChoice(g){
-  if (G.phase !== 'playing') return;
+  if (G.phase !== 'playing' || !playable(g)) return;
   const pop = $('choicePop');
   pop.replaceChildren(...g.options.map((o, i) => {
     const b = h('button', { type: 'button', role: 'option' }, h('kbd', { text: String(i + 1) }), o);
@@ -1146,11 +1261,17 @@ function openChoice(g){
 }
 function closeChoice(){ $('choicePop').classList.add('hidden'); G.choiceFor = null; }
 function pickChoice(g, i){
-  if (G.phase !== 'playing' || g.locked || !g.options[i] || g.wrong?.has(i)) return;
+  if (G.phase !== 'playing' || !playable(g) || !g.options[i] || g.wrong?.has(i)) return;
   const o = g.options[i];
   g.input.value = o;
-  if (same(o, g.answer)){ lockGap(g); afterChange(g); focusNext(g.i, true); }
-  else { (g.wrong ||= new Set()).add(i); flashBad(g); openChoice(g); afterChange(g); }
+  if (same(o, g.answer)){ lockGap(g); afterChange(g); focusNext(g.i); }
+  else if (G.s.oneShot){
+    // ⚡ one shot: the wrong pick stays, this gap is gone for this try
+    g.dead = true; G.misses = (G.misses || 0) + 1;
+    flashBad(g); g.input.classList.add('dead');
+    closeChoice(); afterChange(g); focusNext(g.i);
+  }
+  else { (g.wrong ||= new Set()).add(i); G.misses = (G.misses || 0) + 1; flashBad(g); openChoice(g); afterChange(g); }
 }
 window.addEventListener('resize', closeChoice);
 document.addEventListener('mousedown', e => {
@@ -1160,7 +1281,7 @@ document.addEventListener('mousedown', e => {
 // ---------- hints (counted in your stats) ----------
 function hint(g){
   if (G.phase !== 'playing') return;
-  g = g && !g.locked ? g : (G.focus && !G.focus.locked ? G.focus : G.gaps.find(x => !x.locked));
+  g = g && playable(g) ? g : (G.focus && playable(G.focus) ? G.focus : G.gaps.find(playable));
   if (!g) return;
   G.hints++; g.hinted = true;
   if (G.s.mode === 'choice'){
@@ -1210,7 +1331,7 @@ function saveProgress(){
   if (!G.active || G.done) return;
   store.set('progress', {
     s: G.s, session: G.session, hints: G.hints, played: G.played, at: Date.now(),
-    tryNo: G.tryNo, tries: G.tries, lastChance: G.lastChance, rewinds: G.rewinds, xpTotal: G.xpTotal,
+    tryNo: G.tryNo, tries: G.tries, lastChance: G.lastChance, reach: G.reach, rewinds: G.rewinds, xpTotal: G.xpTotal,
     answers: G.gaps.map(g => g.locked ? '' : g.input.value),
     locked: G.gaps.map(g => g.locked ? (g.lockTry || 1) : 0),
     hinted: G.gaps.map(g => g.hinted ? 1 : 0),
@@ -1361,6 +1482,7 @@ function poll(){
   if (cur !== G.cur){
     G.lineEls[G.cur]?.classList.remove('now'); G.solEls[G.cur]?.classList.remove('now');
     G.cur = cur;
+    if (cur > G.reach && G.phase === 'playing'){ G.reach = cur; applyReach(); queueSave(); }
     if (cur < 0) return;
     G.lineEls[cur].classList.add('now'); G.solEls[cur].classList.add('now');
     if ($('followChk').checked && G.wait < 0){
@@ -1445,11 +1567,78 @@ document.addEventListener('keydown', e => {
 });
 
 // =====================================================================
+// 🌍 translation panel: select words in the lyrics → translation (MyMemory, free)
+// one word → also meaning + pronunciation (Free Dictionary API)
+// =====================================================================
+const trCache = new Map();
+let trSeq = 0, trTimer = 0, trLast = '';
+try { $('trLang').value = localStorage.getItem('lgc:trLang') || 'es'; } catch {}
+function setTransOpen(on){
+  $('transPanel').classList.toggle('hidden', !on);
+  $('gameGrid').classList.toggle('with-trans', on);
+  document.body.classList.toggle('trans-open', on);
+  $('transBtn').classList.toggle('saved', on);
+}
+$('transBtn').onclick = () => setTransOpen($('transPanel').classList.contains('hidden'));
+$('trClose').onclick = () => setTransOpen(false);
+$('trLang').onchange = () => { try { localStorage.setItem('lgc:trLang', $('trLang').value); } catch {} if (trLast) translateSel(trLast, true); };
+
+document.addEventListener('selectionchange', () => {
+  if (view !== 'game') return;
+  clearTimeout(trTimer);
+  trTimer = setTimeout(() => {
+    const sel = window.getSelection();
+    const text = sel ? sel.toString().replace(/\s+/g, ' ').trim() : '';
+    if (!/\p{L}{2,}/u.test(text) || text.length > 400 || text === trLast) return;
+    const node = sel.anchorNode && (sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement);
+    if (!node || !node.closest('#lyrics, #solution') || node.closest('.future')) return;
+    translateSel(text);
+  }, 450);
+});
+
+async function translateSel(text, force){
+  trLast = text;
+  setTransOpen(true);
+  const lang = $('trLang').value, seq = ++trSeq;
+  const word = /^[A-Za-z']+$/.test(text) ? text.toLowerCase().replace(/^'+|'+$/g, '') : '';
+  const out = h('div', { class: 'tr-out', text: 'Translating…' });
+  const dict = word ? h('div', { class: 'tr-dict', text: 'Looking up the meaning…' }) : null;
+  $('trBody').replaceChildren(h('div', { class: 'tr-src', text: text }), out, dict);
+  const key = lang + '|' + text;
+  try {
+    let res = trCache.get(key);
+    if (!res){
+      const r = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|${lang}`);
+      const j = await r.json();
+      if (j.quotaFinished) throw new Error('quota');
+      res = j.responseData?.translatedText || '';
+      trCache.set(key, res);
+    }
+    if (seq === trSeq) out.textContent = res || 'No translation found.';
+  } catch (e){ if (seq === trSeq) out.textContent = e.message === 'quota' ? 'Daily free translation limit reached. Try again tomorrow.' : 'Couldn’t translate right now.'; }
+  if (!word) return;
+  try {
+    const r = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`);
+    if (seq !== trSeq) return;
+    if (!r.ok){ dict.textContent = 'No dictionary entry for this word (slang or a name?).'; return; }
+    const e = (await r.json())[0];
+    const audio = e.phonetics?.find(p => p.audio)?.audio;
+    const phon = e.phonetic || e.phonetics?.find(p => p.text)?.text || '';
+    dict.replaceChildren(
+      h('div', { class: 'tr-word' }, h('b', { text: e.word }), phon ? h('span', { text: ' ' + phon }) : null,
+        audio ? h('button', { class: 'tr-say', title: 'Listen', 'aria-label': 'Listen to the pronunciation', text: '🔊', onclick: () => new Audio(audio).play().catch(() => {}) }) : null),
+      ...e.meanings.slice(0, 3).map(m => h('div', { class: 'tr-mean' },
+        h('em', { text: m.partOfSpeech }), ' ', m.definitions[0]?.definition || '',
+        m.definitions[0]?.example ? h('div', { class: 'tr-ex', text: '“' + m.definitions[0].example + '”' }) : null)));
+  } catch { if (seq === trSeq) dict.textContent = 'Couldn’t load the dictionary right now.'; }
+}
+
+// =====================================================================
 // share link, print worksheet
 // =====================================================================
 function shareUrl(){
   const s = G.s;
-  const p = { p: s.preset, o: s.opts, m: s.mode, sd: s.seed, yt: s.yt || undefined, pl: s.pauseLines ? 1 : undefined, of: s.offset || undefined, t: s.title, a: s.artist };
+  const p = { p: s.preset, o: s.opts, m: s.mode, sd: s.seed, yt: s.yt || undefined, pl: s.pauseLines ? 1 : undefined, os: s.oneShot ? 1 : undefined, of: s.offset || undefined, t: s.title, a: s.artist };
   if (s.src === 'lrclib') p.id = s.id; else p.l = s.lines;
   return location.origin + location.pathname + '#c=' + b64enc(JSON.stringify(p));
 }
@@ -1473,7 +1662,7 @@ async function openShared(){
   } catch { toast('Could not load the shared song.'); return; }
   if (!song.lines.length) return;
   const s = { src: song.src, id: song.id || '', title: p.t || song.title, artist: p.a ?? song.artist, cover: '', lines: song.lines, times: song.times,
-    preset: p.o ? (p.p || 'custom') : 'medium', mode: p.m === 'choice' ? 'choice' : 'type', pauseLines: !!(p.pl || p.m === 'listen'),
+    preset: p.o ? (p.p || 'custom') : 'medium', mode: p.m === 'choice' ? 'choice' : 'type', pauseLines: !!(p.pl || p.m === 'listen'), oneShot: !!p.os,
     opts: p.o || { ...PRESETS.medium, skipParens: true, instant: true }, seed: p.sd || newSeed(), yt: p.yt || '', offset: p.of || 0 };
   if (song.src !== 'paste') findCover(s.title, s.artist).then(u => { s.cover = u; });
   openModal(

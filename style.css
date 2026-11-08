@@ -436,3 +436,43 @@ kbd{font:600 .72rem var(--font);padding:1px 6px;border-radius:5px;background:var
   #printArea .pa-key ol{columns:3;font:11pt/1.8 var(--font)}
 }
 @media (prefers-reduced-motion:reduce){ *{animation:none!important;transition:none!important} }
+
+/* ---------- anti-cheat: lines the song hasn't reached yet ---------- */
+.lyrics .line.future{filter:blur(6px);opacity:.55;user-select:none;-webkit-user-select:none;pointer-events:none;transition:filter .4s,opacity .4s}
+.gap input.dead{text-decoration:line-through;opacity:.8}
+
+/* ---------- read lyrics before playing ---------- */
+.read-lyrics{text-align:left;max-height:55vh;overflow:auto;padding:12px 14px;margin:10px 0;border-radius:14px;background:var(--surface-2);line-height:1.75}
+.read-lyrics .gap-line{height:12px}
+
+/* ---------- translation panel ---------- */
+.trans{background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:14px;box-shadow:var(--shadow);display:grid;gap:12px;align-content:start;position:sticky;top:78px;max-height:calc(100vh - 190px);overflow:auto}
+.tr-head{display:flex;align-items:center;gap:8px}
+.tr-head b{flex:1;font-family:var(--display)}
+.tr-head select.field{width:auto;margin:0;padding:6px 8px;font-size:.88rem}
+.tr-x{width:30px;height:30px;border-radius:9px;color:var(--muted)}
+.tr-x:hover{background:var(--surface-2);color:var(--text)}
+.tr-src{color:var(--muted);font-size:.9rem;border-left:3px solid var(--border);padding-left:10px}
+.tr-out{font-size:1.1rem;font-weight:600}
+.tr-dict{display:grid;gap:8px;font-size:.9rem;border-top:1px solid var(--border);padding-top:10px}
+.tr-word{display:flex;align-items:center;gap:6px}
+.tr-word span{color:var(--muted)}
+.tr-say{margin-left:auto;width:32px;height:32px;border-radius:50%;background:var(--surface-2)}
+.tr-mean em{color:var(--accent-text);font-style:normal;font-weight:700;font-size:.8rem;text-transform:uppercase}
+.tr-ex{color:var(--muted);font-style:italic;margin-top:2px}
+body.trans-open .wrap{max-width:1440px}
+.game-grid.with-trans{display:grid;grid-template-columns:1fr 290px;gap:20px;align-items:start}
+.game-grid.with-player.with-trans{grid-template-columns:minmax(260px,320px) 1fr 290px}
+@media (max-width:1100px){
+  .game-grid.with-trans,.game-grid.with-player.with-trans{grid-template-columns:1fr}
+  .game-grid.with-player.with-trans{grid-template-columns:minmax(260px,320px) 1fr}
+  .trans{position:fixed;left:12px;right:12px;bottom:84px;top:auto;max-height:42vh;z-index:25;box-shadow:var(--shadow-lg)}
+}
+@media (max-width:960px){ .game-grid.with-player.with-trans{grid-template-columns:1fr} }
+
+/* ---------- phones: big tap buttons for the 4 options ---------- */
+@media (max-width:640px){
+  .choice-pop{position:fixed!important;left:10px!important;right:10px;top:auto!important;bottom:86px;max-width:none;display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:10px;z-index:35}
+  .choice-pop button{justify-content:center;padding:15px 10px;font-size:1.05rem;border-radius:12px}
+  .choice-pop kbd{display:none}
+}

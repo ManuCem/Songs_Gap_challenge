@@ -123,10 +123,10 @@ const SMALL = new Set(('a an the and or but nor so yet to of in on at by for fro
 const FILLER = new Set('oh ooh ohh woah whoa yeah yea ya ah ahh uh hey la na da mmm mm hmm ay ayy eh huh yo'.split(' '));
 
 const PRESETS = {
-  easy:   { density: 10, minLen: 4, focus: 'content', firstLetter: true,  sizeBoxes: true,  desc: 'About 1 in 10 words, longer words only, with first-letter hints.' },
-  medium: { density: 18, minLen: 3, focus: 'any',     firstLetter: false, sizeBoxes: true,  desc: 'About 1 in 5 words. Boxes show the word length.' },
-  hard:   { density: 30, minLen: 2, focus: 'any',     firstLetter: false, sizeBoxes: false, desc: 'About 1 in 3 words, short ones too, and no length clues.' },
-  insane: { density: 50, minLen: 1, focus: 'any',     firstLetter: false, sizeBoxes: false, desc: 'Half of the words are gone. Good luck. 🔥' },
+  easy:   { density: 10, minLen: 4, focus: 'content', firstLetter: true,  sizeBoxes: true,  desc: 'Casual listener. 1 in 10 words, first letters given. Failing this is a choice. 💀' },
+  medium: { density: 18, minLen: 3, focus: 'any',     firstLetter: false, sizeBoxes: true,  desc: 'You know the chorus… right? 1 in 5 words.' },
+  hard:   { density: 30, minLen: 2, focus: 'any',     firstLetter: false, sizeBoxes: false, desc: 'Day-one fan. 1 in 3 words, no length clues.' },
+  insane: { density: 50, minLen: 1, focus: 'any',     firstLetter: false, sizeBoxes: false, desc: 'You ARE the artist. Half the song is gone. 🔥' },
 };
 const MODE_LABEL = { type: '✍️ Type', choice: '🎯 Choose', listen: '✍️ Type' };
 const PRESET_LABEL = { easy: 'Easy', medium: 'Medium', hard: 'Hard', insane: 'Insane', custom: 'Custom' };
@@ -207,7 +207,7 @@ function applyTheme(t){
   const dark = t ? t === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
   document.querySelector('meta[name=theme-color]').content = dark ? '#0d0e11' : '#f4f2ee';
 }
-applyTheme(store.get('theme', null));
+applyTheme(store.get('theme', 'dark'));
 $('themeBtn').onclick = () => {
   const cur = document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
   const next = cur === 'dark' ? 'light' : 'dark';
@@ -243,8 +243,64 @@ $('brand').onclick = e => { e.preventDefault(); showView('play'); };
 // =====================================================================
 // home: search, quick picks, paste
 // =====================================================================
-const QUICK = ['Adele Hello', 'Ed Sheeran Perfect', 'Coldplay Yellow', 'Bruno Mars Count on Me', 'Queen Bohemian Rhapsody', 'Imagine Dragons Believer', 'Taylor Swift Shake It Off', 'The Beatles Let It Be'];
-QUICK.forEach(q => $('quickPicks').append(h('button', { class: 'chip', text: q, onclick: () => { $('searchInput').value = q; doSearch(q); } })));
+// 🧪 fan tests: [artist, song, what fans call them]
+const FAN_TESTS = [
+  ['Playboi Carti', 'Sky', 'Carti'], ['Central Cee', 'Sprinter', 'Cench'], ['Drake', "God's Plan", 'Drake'],
+  ['Travis Scott', 'FE!N', 'Travis'], ['Kendrick Lamar', 'Not Like Us', 'Kendrick'], ['Lil Uzi Vert', 'Just Wanna Rock', 'Uzi'],
+  ['Ice Spice', 'Munch', 'Ice Spice'], ['Eminem', 'Rap God', 'Eminem'], ['Future', 'Mask Off', 'Future'],
+  ['21 Savage', 'a lot', '21'], ['Juice WRLD', 'Lucid Dreams', 'Juice'], ['XXXTENTACION', 'SAD!', 'X'],
+  ['Yeat', 'Get Busy', 'Yeat'], ['Ken Carson', 'ss', 'Ken Carson'], ['Gunna', 'fukumean', 'Gunna'],
+  ['Don Toliver', 'No Idea', 'Don'], ['Metro Boomin', 'Superhero', 'Metro'], ['Lil Baby', 'Drip Too Hard', 'Lil Baby'],
+  ['Tyler, The Creator', 'EARFQUAKE', 'Tyler'], ['Frank Ocean', 'Pink + White', 'Frank'], ['SZA', 'Kill Bill', 'SZA'],
+  ['The Weeknd', 'Blinding Lights', 'Weeknd'], ['Sabrina Carpenter', 'Espresso', 'Sabrina'], ['Billie Eilish', 'BIRDS OF A FEATHER', 'Billie'],
+  ['Doja Cat', 'Paint The Town Red', 'Doja'], ['Nicki Minaj', 'Super Bass', 'Nicki'], ['Dave', 'Starlight', 'Dave'],
+  ['Stormzy', 'Vossi Bop', 'Stormzy'], ['Aitch', 'Taste (Make It Shake)', 'Aitch'], ['Lil Nas X', 'INDUSTRY BABY', 'Lil Nas X'],
+  ['Post Malone', 'Sunflower', 'Post'], ['Kanye West', 'Stronger', 'Ye'], ['Jack Harlow', 'First Class', 'Jack Harlow']
+];
+const FAN_NICK = Object.fromEntries(FAN_TESTS.map(([a, , n]) => [norm(a), n]));
+const fanName = artist => { const p = primaryArtist(artist || ''); return FAN_NICK[norm(p)] || p || 'this artist'; };
+const BAITS = [
+  a => `Only real ${a} fans pass this.`,
+  a => `Fake ${a} fans fail this instantly 💀`,
+  a => `If you can’t finish this, you’re not a real ${a} fan.`,
+  a => `You’ve been mumbling ${a} for years. Time to find out.`,
+  a => `Real ${a} fans don’t need the lyrics. Prove it.`,
+  a => `${a} fans when they have to type the words: 🧍`,
+  a => `Day-one ${a} fans only. Edit-watchers, go back to TikTok.`
+];
+const pickOne = arr => arr[Math.floor(Math.random() * arr.length)];
+const bait = artist => pickOne(BAITS)(fanName(artist));
+
+// one tap → search → open the song straight away
+async function fanTest(artist, song){
+  const q = artist + ' ' + song;
+  $('searchInput').value = q;
+  await doSearch(q);
+  document.querySelector('#searchResults .result')?.click();
+}
+function renderFanTests(){
+  const box = $('quickPicks');
+  const pick = shuffle(FAN_TESTS.slice()).slice(0, 6);
+  box.replaceChildren(...pick.map(([a, t, n]) => h('button', { class: 'fan-test', onclick: () => fanTest(a, t) },
+      h('small', { text: '🧪 Real ' + n + ' fan test' }), h('b', { text: t }), h('span', { text: a }))),
+    h('button', { class: 'fan-more', title: 'More fan tests', 'aria-label': 'More fan tests', text: '🔀', onclick: renderFanTests }));
+}
+renderFanTests();
+
+// hero: "Only real ___ fans pass this." rotating every few seconds
+let heroI = Math.floor(Math.random() * FAN_TESTS.length);
+function heroBait(){
+  const [a, t, n] = FAN_TESTS[heroI % FAN_TESTS.length];
+  const txt = pickOne(BAITS)('\u0000');
+  const [before, after] = txt.split('\u0000');
+  $('heroBait').replaceChildren(before, h('button', { class: 'rot', type: 'button', text: n, title: `Take the ${n} fan test`, onclick: () => fanTest(a, t) }), after);
+}
+heroBait();
+setInterval(() => {
+  if (view !== 'play') return;
+  $('heroBait').classList.add('out');
+  setTimeout(() => { heroI++; heroBait(); $('heroBait').classList.remove('out'); }, 260);
+}, 2800);
 
 let searchTimer = 0, searchSeq = 0;
 $('searchInput').addEventListener('input', e => {
@@ -485,6 +541,7 @@ function openSetup(song, extra = {}){
 
   $('setupTitle').textContent = song.title;
   $('setupArtist').textContent = [song.artist, song.album].filter(Boolean).join(' · ') || 'Your own lyrics';
+  $('setupBait').textContent = song.artist ? '🧪 ' + bait(song.artist) : '';
   const words = song.lines.join(' ').split(/\s+/).filter(Boolean).length;
   $('setupBadges').replaceChildren(
     song.times ? h('span', { class: 'badge synced', text: '⏱ SYNCED LYRICS' }) : h('span', { class: 'badge', text: 'LYRICS' }),
@@ -900,9 +957,10 @@ function startGame(s, restore, mp){
       G.gaps.push(g); G.lineGaps[li].push(g);
     });
     if (toks){
-      // after the game you can click any line to jump there in the song
-      const seek = e => { if (G.done && e.target.tagName !== 'INPUT') seekLine(li); };
-      d.addEventListener('click', seek); sd.addEventListener('click', seek);
+      // after the game, a small ▶ on each line plays it (clicking/selecting the text only selects it)
+      const play = () => h('button', { class: 'lp', type: 'button', title: 'Play this line', 'aria-label': 'Play this line', text: '▶',
+        onclick: e => { e.stopPropagation(); seekLine(li); } });
+      d.append(play()); sd.append(play());
     }
     box.append(d); solBox.append(sd);
     G.lineEls.push(d); G.solEls.push(sd);
@@ -1070,6 +1128,7 @@ function showReady(){
   openModal({ locked: true },
     h('div', { class: 'big-emoji', text: last ? '❤️' : music ? '🎧' : '✍️' }),
     h('h2', { text: last ? 'Last chance' : G.tries.length ? `Ready for try ${G.tryNo}?` : 'Ready?' }),
+    !G.tries.length && G.s.artist ? h('p', { class: 'roast', text: `🧪 Real ${fanName(G.s.artist)} fan test. Fake fans fail here.` }) : null,
     h('p', { class: 'muted', text: last
       ? `The song starts again. This time you can rewind ${REWIND_SECONDS} seconds ${REWINDS} times. After it, you’ll see your final results.`
       : music
@@ -1164,9 +1223,12 @@ function finishGame(xpLastTry){
   updateHud();
 
   const n = G.tries.length;
+  const pctNow = Math.round(correct / total * 100);
   openModal(
     h('h2', { text: perfect ? (n <= 1 ? '🏆 Perfect on the first try!' : `🎉 All words in ${n} tries!`) : '🏁 Final results' }),
+    h('div', { class: 'verdict ' + verdict(pctNow)[2], text: verdictText(pctNow, G.s.artist) }),
     ringEl(correct, total),
+    h('p', { class: 'roast', text: roast(pctNow, G.s.artist) }),
     triesChips(),
     h('div', { class: 'res-stats' },
       h('span', { class: 'pill', text: `🔁 ${n} ${n === 1 ? 'try' : 'tries'}` }),
@@ -1175,7 +1237,8 @@ function finishGame(xpLastTry){
     h('p', { class: 'save-note', id: 'saveNote' }),
     h('div', { class: 'lb hidden', id: 'lbBox' }),
     h('div', { class: 'btns' },
-      h('button', { class: 'btn primary', text: '👁 See the solution & replay the song', onclick: () => { closeModal(); showTab('solution'); } }),
+      h('button', { class: 'btn primary', text: '📤 Share my score (dare your friends)', onclick: () => shareScore(pctNow) }),
+      h('button', { class: 'btn', text: '👁 See the solution & replay the song', onclick: () => { closeModal(); showTab('solution'); } }),
       h('button', { class: 'btn', text: '🔁 New game with new gaps', onclick: () => { closeModal(); restart(); } }),
       h('button', { class: 'btn', text: '♪ Choose another song', onclick: () => { closeModal(); showView('play'); } })));
   syncAttempt(true, xpLastTry + bonus);
@@ -1702,6 +1765,64 @@ async function translateSel(text, force){
 // =====================================================================
 // share link, print worksheet
 // =====================================================================
+// ---------- roasts & the share card ----------
+const ROASTS = [
+  [0, ['0%. Were you even listening? 💀', 'Not a single word. Impressive, honestly. 💀']],
+  [20, ['Bro’s been singing “na na na” this whole time 💀', 'You know the beat. Just the beat. 😭']],
+  [40, ['You know the vibe, not the words 😭', 'Mumble-singing in the car has consequences 🫠']],
+  [60, ['Half fan, half mumbler 🫠', 'You know it… kind of 👀']],
+  [80, ['Okay, you actually listen 👀', 'Solid. Not day-one, but solid 😤']],
+  [99, ['So close. Run it back 😤', 'One more try and it’s yours 😤']],
+  [100, ['Are you the artist?? 🐐', 'Certified day-one fan 🐐']]
+];
+const ARTIST_ROASTS = [
+  [20, [a => `Fake ${a} fan detected 🚨`, a => `-1000 aura. ${a} would be ashamed 💀`, a => `You’re cooked. Zero real ${a} fan behaviour 💀`, a => `Bro only knows the ${a} TikTok edits 💀`]],
+  [40, [a => `Casual ${a} listener spotted 🫵`, a => `You know the ${a} vibe, not the words 😭`, a => `Mumbling ${a} in the car has consequences 🫠`]],
+  [60, [a => `Mid ${a} fan energy 😐`, a => `Half fan, half NPC 🫠`, () => 'You know it… kind of 👀']],
+  [80, [a => `Okay, you actually listen to ${a} 👀`, () => '+500 aura 😤', () => 'Solid. Not day-one, but solid 😤']],
+  [99, [a => `So close. Almost a real ${a} fan 😤`, () => 'One more try and you’re certified 😤']],
+  [100, [a => `Real ${a} fan confirmed ✅`, a => `+1000 aura. Are you ${a}?? 🐐`, a => `Certified day-one ${a} fan 🐐`]]
+];
+const VERDICTS = [[20, '🚨 FAKE FAN', 'fake'], [40, '🫵 CASUAL', 'casual'], [60, '😐 MID', 'mid'], [80, '👀 REAL LISTENER', 'real'], [99, '✅ REAL FAN', 'real'], [100, '🐐 DAY ONE', 'goat']];
+const verdict = pct => VERDICTS.find(([max]) => pct <= max) || VERDICTS[VERDICTS.length - 1];
+// "🚨 FAKE DRAKE FAN", "🐐 DAY-ONE CARTI FAN"… (generic when there's no artist)
+function verdictText(pct, artist){
+  const [, txt, kind] = verdict(pct), fan = fanName(artist);
+  if (fan === 'this artist') return txt;
+  const F = fan.toUpperCase();
+  return { fake: `🚨 FAKE ${F} FAN`, goat: `🐐 DAY-ONE ${F} FAN` }[kind] || (pct > 80 ? `✅ REAL ${F} FAN` : txt);
+}
+function roast(pct, artist){
+  if (artist && fanName(artist) !== 'this artist' && Math.random() < 0.75){
+    const tier = ARTIST_ROASTS.find(([max]) => pct <= max) || ARTIST_ROASTS[ARTIST_ROASTS.length - 1];
+    return pickOne(tier[1])(fanName(artist));
+  }
+  const tier = ROASTS.find(([max]) => pct <= max) || ROASTS[ROASTS.length - 1];
+  return pickOne(tier[1]);
+}
+// 🟩 found · 🟥 wrong answer · ⬛ missed (in song order, max 50 squares)
+function scoreGrid(){
+  let u = units().map(g => g.locked ? '🟩' : g.dead ? '🟥' : '⬛');
+  if (u.length > 50){ const step = u.length / 50; u = Array.from({ length: 50 }, (_, i) => u[Math.floor(i * step)]); }
+  const rows = [];
+  for (let i = 0; i < u.length; i += 10) rows.push(u.slice(i, i + 10).join(''));
+  return rows.join('\n');
+}
+async function shareScore(pct){
+  const s = G.s, n = G.tries.length;
+  const fan = fanName(s.artist), v = verdictText(pct, s.artist);
+  const text = `🧪 ${fan === 'this artist' ? 'LyricsGap' : fan + ' fan test'} · ${s.title}\n`
+    + `${PRESET_LABEL[s.preset] || 'Custom'} · ${lockedCount()}/${unitCount()} words (${pct}%)${n > 1 ? ' · ' + n + ' tries' : ''}\n`
+    + scoreGrid() + '\n'
+    + `Verdict: ${v}\n`
+    + roast(pct, s.artist) + '\n'
+    + (fan !== 'this artist' ? `Only real ${fan} fans can beat this 👇` : 'Think you know it better? Same gaps, your turn 👇');
+  const url = shareUrl();
+  if (navigator.share){ try { await navigator.share({ title: 'LyricsGap', text, url }); return; } catch (e){ if (e.name === 'AbortError') return; } }
+  try { await navigator.clipboard.writeText(text + '\n' + url); toast('📋 Score copied! Paste it in the comments 😈'); }
+  catch { prompt('Copy your score:', text + '\n' + url); }
+}
+
 function shareUrl(){
   const s = G.s;
   const p = { p: s.preset, o: s.opts, m: s.mode, sd: s.seed, yt: s.yt || undefined, pl: s.pauseLines ? 1 : undefined, os: s.oneShot ? 1 : undefined, of: s.offset || undefined, t: s.title, a: s.artist };
@@ -1710,8 +1831,8 @@ function shareUrl(){
 }
 $('shareBtn').onclick = async () => {
   const url = shareUrl();
-  const text = `🎵 Can you beat me? Fill in the missing lyrics of “${G.s.title}”`;
-  if (navigator.share){ try { await navigator.share({ title: 'Lyrics Gap Challenge', text, url }); return; } catch (e){ if (e.name === 'AbortError') return; } }
+  const text = `🎤 I bet you don’t know the lyrics of “${G.s.title}”. Same gaps as me, go:`;
+  if (navigator.share){ try { await navigator.share({ title: 'LyricsGap', text, url }); return; } catch (e){ if (e.name === 'AbortError') return; } }
   try { await navigator.clipboard.writeText(url); toast('🔗 Link copied! Everyone who opens it gets exactly the same gaps.'); }
   catch { prompt('Copy this link:', url); }
 };
@@ -2760,6 +2881,7 @@ function showPodium(){
     h('div', { class: 'podium' }, pod(second, 2), pod(first, 1), pod(third, 3)),
     ranked.length > 3 ? h('div', { class: 'modal-board' }, boardEl(50)) : null,
     myPlace ? h('p', { class: 'muted', text: `You finished #${myPlace} of ${ranked.length} with ${fmtPts(MP.points)} points.` }) : null,
+    myPlace ? h('p', { class: 'roast', text: myPlace === 1 ? 'Undisputed. Nobody in this lobby knows the lyrics like you 🐐' : myPlace === ranked.length ? `Last place. Fake ${fanName(G.s?.artist)} fan of the lobby 💀` : 'Mid. Run it back 😤' }) : null,
     h('div', { class: 'btns' },
       h('button', { class: 'btn primary', text: '👁 See the solution', onclick: () => { MP.modal = null; closeModal(); showTab('solution'); } }),
       host ? h('button', { class: 'btn', text: '🔁 Back to the lobby (choose the next song)', onclick: rematch }) : null,

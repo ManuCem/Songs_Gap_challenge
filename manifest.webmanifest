@@ -1,7 +1,7 @@
 {
-  "name": "Lyrics Gap Challenge",
+  "name": "LyricsGap",
   "short_name": "LyricsGap",
-  "description": "Learn English with songs: fill in the missing lyrics while you listen.",
+  "description": "You don’t know the lyrics. Fill in the missing words while the song plays, and dare your friends.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
@@ -9,9 +9,29 @@
   "background_color": "#0d0e11",
   "theme_color": "#0d0e11",
   "icons": [
-    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
-    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
-    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
-    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
   ]
 }

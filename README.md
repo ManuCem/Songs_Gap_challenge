@@ -1,7 +1,7 @@
-# 🎵 Lyrics Gap Challenge
+# 🎤 LyricsGap: you don't know the lyrics
 
-A free web app for learning English with music: search any song, pick a level, and fill in the missing lyrics (typing, or tapping sound-alike options) while the song plays, with lines unlocking as you hear them, a translation panel, and tries that let you beat your own score.
-Play with friends in real time: create a room, friends join from their phones with a code or QR, the host picks the songs and the music plays in sync on every device, with a live scoreboard (+1 per word, −1 per mistake), teams, a 🎡 playlist wheel and a final podium. Your games, XP and streaks are saved privately if you sign in with Google.
-It runs entirely in the browser (GitHub Pages + Firebase + free lyrics, music and translation services) and can be installed on your phone like an app.
+You've heard the song 500 times. LyricsGap hides some of the words while it plays, and you have to fill them in (no rewinding, wrong answers stay wrong), then share a Wordle-style score card to prove you actually understand Travis Scott, Eminem or whoever you claim to know.
+Make a lobby, send your friends the code or QR, and play the same song at the same time with a live scoreboard (+1 per word, −1 per mistake), teams, a 🎡 playlist wheel and a final podium.
+It's free, runs entirely in the browser (GitHub Pages + Firebase + free lyrics and music services) and installs on your phone like an app.
 
 **▶ Play it here: https://manucem.github.io/Songs_Gap_challenge/**

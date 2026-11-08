@@ -3,8 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Lyrics Gap Challenge</title>
-<meta name="description" content="Learn English with songs: search any song, pick your level and fill in the missing lyrics while you listen.">
+<title>LyricsGap: you don’t know the lyrics</title>
+<meta name="description" content="You’ve heard it 500 times. Fill in the missing lyrics while the song plays and prove you actually understand it. Challenge your friends in a live lobby.">
+<meta property="og:title" content="LyricsGap: you don’t know the lyrics">
+<meta property="og:description" content="Fill in the missing lyrics while the song plays. Think you understand your favourite artist? Prove it.">
 <meta name="theme-color" content="#0d0e11">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
@@ -26,9 +28,9 @@
       <span>Lyrics<b>Gap</b></span>
     </a>
     <nav class="tabs-nav" id="mainNav">
-      <button data-view="play" class="on">🎵 Play</button>
-      <button data-view="library">📚 Library</button>
-      <button data-view="stats">📈 Stats</button>
+      <button data-view="play" class="on">Play</button>
+      <button data-view="library">Library</button>
+      <button data-view="stats">Stats</button>
     </nav>
     <div class="nav-right">
       <span class="pill hidden" id="streakPill" title="Daily streak">🔥 <b id="streakVal">0</b></span>
@@ -53,14 +55,36 @@
     <div id="continueCard" class="continue hidden"></div>
 
     <div class="hero">
-      <h1>Learn English <em>one song</em> at a time.</h1>
-      <p class="lead">Search any song, pick your level and fill in the missing words while you listen.</p>
+      <p class="kicker">the lyrics game</p>
+      <h1>You don’t know<br>the lyrics.</h1>
+      <p class="lead">You’ve heard it 500 times. Now fill in the missing words while it plays.</p>
+      <p class="bait-line" id="heroBait"></p>
+      <div class="vs-card">
+        <div class="vs-text">
+          <span class="vs-tag">⚔️ 1v1 your friends</span>
+          <h3>Same song. Same gaps.<br>Live scoreboard.</h3>
+          <p>Make a lobby, send the code, watch them fail in real time.</p>
+        </div>
+        <div class="vs-actions">
+          <button class="btn primary big" id="createRoomBtn">+ Create a lobby</button>
+          <div class="vs-join">
+            <input id="joinCode" class="field code-input" placeholder="CODE" maxlength="6" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="Room code">
+            <button class="btn" id="joinBtn">Join →</button>
+          </div>
+        </div>
+      </div>
+      <p class="solo-label">…or play solo</p>
       <label class="search">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-        <input id="searchInput" type="search" placeholder="Search a song or artist…" autocomplete="off" aria-label="Search a song or artist">
+        <input id="searchInput" type="search" placeholder="Search a song you know…" autocomplete="off" aria-label="Search a song or artist">
         <span class="spinner hidden" id="searchSpin"></span>
       </label>
-      <div class="chips" id="quickPicks"></div>
+      <div class="fan-tests" id="quickPicks"></div>
+      <ol class="steps3">
+        <li><b>Pick a song</b> you think you know</li>
+        <li><b>Fill the gaps</b> while it plays. No rewinding.</li>
+        <li><b>Share your score</b> or 1v1 your friends live</li>
+      </ol>
     </div>
 
     <div id="searchResults" class="results"></div>
@@ -76,18 +100,7 @@
     </div>
 
     <!-- multiplayer: join a room / playlist tray -->
-    <div class="card mp-home">
-      <div>
-        <h3>👥 Play with friends</h3>
-        <p class="muted small">Enter the code on the host's screen (or scan its QR code).</p>
-      </div>
-      <div class="row">
-        <input id="joinCode" class="field code-input" placeholder="CODE" maxlength="6" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="Room code">
-        <button class="btn primary" id="joinBtn">Join →</button>
-      </div>
-      <button class="btn dark" id="createRoomBtn">👥 Create a room (you host)</button>
-      <p class="hint" style="margin:0">The host creates the room first, friends join, then the host picks the song(s). The room stays open for the next game.</p>
-    </div>
+    <p class="foot muted">Made for everyone who sings “na na na” instead of the real words.</p>
     <div id="playlistTray" class="card playlist hidden"></div>
   </section>
 
@@ -103,6 +116,7 @@
         <div class="eyebrow" id="setupBadges"></div>
         <h2 id="setupTitle"></h2>
         <p class="muted" id="setupArtist"></p>
+        <p class="setup-bait" id="setupBait"></p>
       </div>
     </div>
 
@@ -171,7 +185,7 @@
         <button class="btn small" id="readLyricsBtn" style="margin-top:10px">📖 Read all the lyrics first</button>
       </div>
     </div>
-    <button class="btn primary big" id="startBtn">Start the challenge →</button>
+    <button class="btn primary big" id="startBtn">I know this one →</button>
     <div class="setup-mp">
       <button class="btn" id="hostBtn">👥 Play this with friends</button>
       <button class="btn primary hidden" id="roomUseBtn">✅ Use this song in the room</button>

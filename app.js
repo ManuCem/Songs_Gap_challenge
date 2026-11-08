@@ -255,7 +255,8 @@ const FAN_TESTS = [
   ['The Weeknd', 'Blinding Lights', 'Weeknd'], ['Sabrina Carpenter', 'Espresso', 'Sabrina'], ['Billie Eilish', 'BIRDS OF A FEATHER', 'Billie'],
   ['Doja Cat', 'Paint The Town Red', 'Doja'], ['Nicki Minaj', 'Super Bass', 'Nicki'], ['Dave', 'Starlight', 'Dave'],
   ['Stormzy', 'Vossi Bop', 'Stormzy'], ['Aitch', 'Taste (Make It Shake)', 'Aitch'], ['Lil Nas X', 'INDUSTRY BABY', 'Lil Nas X'],
-  ['Post Malone', 'Sunflower', 'Post'], ['Kanye West', 'Stronger', 'Ye'], ['Jack Harlow', 'First Class', 'Jack Harlow']
+  ['Post Malone', 'Sunflower', 'Post'], ['Kanye West', 'Stronger', 'Ye'], ['Jack Harlow', 'First Class', 'Jack Harlow'],
+  ['Ed Sheeran', 'Shape of You', 'Ed Sheeran'], ['Ed Sheeran', 'Perfect', 'Ed Sheeran'], ['Playboi Carti', 'Magnolia', 'Carti'], ['Playboi Carti', 'Long Time - Intro', 'Carti']
 ];
 const FAN_NICK = Object.fromEntries(FAN_TESTS.map(([a, , n]) => [norm(a), n]));
 const fanName = artist => { const p = primaryArtist(artist || ''); return FAN_NICK[norm(p)] || p || 'this artist'; };
@@ -266,7 +267,8 @@ const BAITS = [
   a => `You’ve been mumbling ${a} for years. Time to find out.`,
   a => `Real ${a} fans don’t need the lyrics. Prove it.`,
   a => `${a} fans when they have to type the words: 🧍`,
-  a => `Day-one ${a} fans only. Edit-watchers, go back to TikTok.`
+  a => `Day-one ${a} fans only. Edit-watchers, go back to TikTok.`,
+  a => `C2 English? ${a} says otherwise.`
 ];
 const pickOne = arr => arr[Math.floor(Math.random() * arr.length)];
 const bait = artist => pickOne(BAITS)(fanName(artist));
@@ -1776,7 +1778,7 @@ const ROASTS = [
   [100, ['Are you the artist?? 🐐', 'Certified day-one fan 🐐']]
 ];
 const ARTIST_ROASTS = [
-  [20, [a => `Fake ${a} fan detected 🚨`, a => `-1000 aura. ${a} would be ashamed 💀`, a => `You’re cooked. Zero real ${a} fan behaviour 💀`, a => `Bro only knows the ${a} TikTok edits 💀`]],
+  [20, [a => `C2 English and you still can’t understand ${a} 💀`, a => `Fake ${a} fan detected 🚨`, a => `-1000 aura. ${a} would be ashamed 💀`, a => `You’re cooked. Zero real ${a} fan behaviour 💀`, a => `Bro only knows the ${a} TikTok edits 💀`]],
   [40, [a => `Casual ${a} listener spotted 🫵`, a => `You know the ${a} vibe, not the words 😭`, a => `Mumbling ${a} in the car has consequences 🫠`]],
   [60, [a => `Mid ${a} fan energy 😐`, a => `Half fan, half NPC 🫠`, () => 'You know it… kind of 👀']],
   [80, [a => `Okay, you actually listen to ${a} 👀`, () => '+500 aura 😤', () => 'Solid. Not day-one, but solid 😤']],

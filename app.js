@@ -214,13 +214,13 @@ $('themeBtn').onclick = () => {
   applyTheme(next); store.set('theme', next);
 };
 
-const VIEWS = ['play', 'setup', 'game', 'library', 'stats'];
+const VIEWS = ['play', 'setup', 'game', 'library', 'stats', 'room'];
 let view = 'play';
 function showView(v){
   if (view === 'game' && v !== 'game'){ pauseVideo(); saveProgress(); closeChoice(); }
   VIEWS.forEach(x => $('view-' + x).classList.toggle('hidden', x !== v));
   view = v;
-  const navKey = (v === 'setup' || v === 'game') ? 'play' : v;
+  const navKey = (v === 'setup' || v === 'game' || v === 'room') ? 'play' : v;
   document.querySelectorAll('#mainNav button').forEach(b => b.classList.toggle('on', b.dataset.view === navKey));
   $('bar').classList.toggle('hidden', v !== 'game');
   document.body.classList.toggle('in-game', v === 'game');
@@ -443,6 +443,7 @@ $('pasteGo').onclick = () => {
 
 // "continue where you left off"
 function renderContinue(){
+  if (MP.code){ renderRoomCard(); return; }
   const box = $('continueCard');
   let title, sub, go;
   if (G.active && !G.done){
@@ -821,7 +822,7 @@ function pickSpread(eligible, n, rand, parsed){
   }
 }
 
-function startGame(s, restore){
+function startGame(s, restore, mp){
   s = normalizeSettings(s);
   const { parsed, eligible } = parseLines(s.lines, s.opts, s.force);
   if (!eligible.length){ toast('No words to hide with these settings. Try a lower minimum length.'); return false; }
@@ -843,7 +844,8 @@ function startGame(s, restore){
     focus: null, wait: -1, passed: new Set(), cur: -1, badYt: new Set(),
     phase: 'ready', tryNo: restore?.tryNo || 1, tries: restore?.tries || [],
     lastChance: !!restore?.lastChance, rewinds: restore?.lastChance ? (restore.rewinds ?? REWINDS) : 0,
-    tryStart: null, heard: false, xpTotal: restore?.xpTotal || 0, pendingStart: false, finishing: false
+    tryStart: null, heard: false, xpTotal: restore?.xpTotal || 0, pendingStart: false, finishing: false,
+    mp: mp || null, mpFinished: false, mpHid: false
   });
 
   const box = $('lyrics'), solBox = $('solution');
@@ -867,7 +869,7 @@ function startGame(s, restore){
       g.input = inp;
       inp.addEventListener('focus', () => { G.focus = g; if (s.mode === 'choice' && !g.locked) openChoice(g); });
       inp.addEventListener('click', () => { if (s.mode === 'choice' && !g.locked) openChoice(g); });
-      inp.addEventListener('blur', () => setTimeout(() => { if (G.choiceFor === g && document.activeElement !== inp) closeChoice(); }, 150));
+      inp.addEventListener('blur', () => { if (g.input.value.trim().length >= g.answer.length) typedMiss(g); setTimeout(() => { if (G.choiceFor === g && document.activeElement !== inp) closeChoice(); }, 150); });
       inp.addEventListener('input', () => onGapInput(g));
       inp.addEventListener('keydown', e => onGapKey(e, g));
       d.append(h('span', { class: 'gap' }, t.pre || '', inp, (t.suf || '') + ' '));
@@ -901,7 +903,11 @@ function startGame(s, restore){
   $('gameCover').replaceChildren(tile(s.title, s.cover, 'md'));
   $('modePill').textContent = (s.mode === 'choice' ? '🎯 Choose' : '✍️ Type') + (s.oneShot ? ' · ⚡' : '') + (s.pauseLines ? ' · ⏸' : '');
   $('saveSongBtn').classList.toggle('hidden', s.src === 'practice');
-  $('shareBtn').classList.toggle('hidden', s.src === 'practice');
+  $('shareBtn').classList.toggle('hidden', s.src === 'practice' || !!mp);
+  ['printBtn', 'transBtn', 'restartBtn'].forEach(id => $(id).classList.toggle('hidden', !!mp));
+  $('newBtn').replaceChildren(mp ? '🚪 ' : '♪ ', h('span', { class: 'lbl', text: mp ? 'Leave room' : 'New song' }));
+  if (mp) setTransOpen(false);
+  mpGameLayout();
   refreshSaveBtn();
   $('keysHint').textContent = (s.mode === 'choice' ? 'Click a gap and press 1–4 to choose' : 'Enter/Tab → next gap · ? → hint')
     + (s.yt ? ' · Alt+2 → play/pause' : '') + ' · Correct words turn green by themselves.';
@@ -946,6 +952,7 @@ function updateHud(){
   $('npLock').textContent = G.done ? 'Free play: tap the bar or any line' : G.lastChance ? `❤️ ${G.rewinds} rewind${G.rewinds === 1 ? '' : 's'} left` : '🔒 No rewinding during a try';
   $('tabSolution').textContent = G.done ? '👁 Solution' : '🔒 Solution';
   $('lyrics').classList.toggle('frozen', !playingPhase && !G.done);
+  mpHud();
 }
 function setInputsEnabled(on){
   G.inputsOn = on;
@@ -956,7 +963,7 @@ function setInputsEnabled(on){
 // ---------- anti-cheat: lines unlock when the song reaches them ----------
 // Only with music + synced lyrics. You can see/type up to the next line; later lines
 // are blurred so you can't read ahead (or copy from a chorus you haven't heard yet).
-const locking = () => !!(G.s?.yt && G.s?.times) && !G.done;
+const locking = () => !!(G.s?.times && (G.s?.yt || G.s?.mpMusic)) && !G.done;
 function unlockedUntil(){
   let i = G.reach + 1;
   while (i < G.parsed.length && !G.parsed[i]) i++;   // skip empty lines
@@ -1023,6 +1030,7 @@ function ringEl(correct, total){
   return h('div', { class: 'ring', style: `--p:${pct}` }, h('div', null, h('span', { text: `${correct}/${total}` }), h('small', { text: pct + '%' })));
 }
 function showReady(){
+  if (G.mp) return mpShowReady();
   G.phase = 'ready';
   setInputsEnabled(false);
   updateHud();
@@ -1055,7 +1063,7 @@ function beginTry(){
   if (G.phase === 'playing' || G.done) return;
   G.phase = 'playing';
   G.tryStart = { correct: lockedCount(), hints: G.hints };
-  G.passed = new Set(); G.wait = -1; G.cur = -1; G.heard = false;
+  G.passed = new Set(); G.wait = -1; G.cur = -1; G.heard = false; G.mpHid = false; G.mpPaused = false;
   G.gaps.forEach(g => {
     g.input.classList.remove('bad');
     if (g.dead){ g.dead = false; g.wrong = null; g.input.value = ''; g.input.classList.remove('dead'); }   // one-shot gaps get a new chance each try
@@ -1080,6 +1088,7 @@ function awardXp(){
 
 function endTry(){
   if (G.phase !== 'playing') return;
+  if (G.mp) return mpEndTry();
   pauseVideo(); closeChoice();
   if (G.wait >= 0){ G.lineEls[G.wait].classList.remove('wait'); G.wait = -1; }
   const correct = lockedCount(), total = G.gaps.length;
@@ -1163,7 +1172,7 @@ function boardKey(s){
 }
 async function syncAttempt(final, xp){
   const note = () => $('saveNote');
-  if (!cloud || !cloud.state.user){
+  if (!signedIn()){
     if (note()) note().textContent = 'Sign in to save your games, earn XP and join the leaderboard.';
     return;
   }
@@ -1202,7 +1211,7 @@ function lockGap(g, silent){
   g.input.value = g.answer;
   g.input.classList.remove('bad');
   g.input.classList.add('ok');
-  if (!silent){ g.input.classList.remove('pop'); void g.input.offsetWidth; g.input.classList.add('pop'); }
+  if (!silent){ g.input.classList.remove('pop'); void g.input.offsetWidth; g.input.classList.add('pop'); mpScore('ok', g); }
   g.input.readOnly = true;
   g.input.tabIndex = -1;
   if (G.choiceFor === g) closeChoice();
@@ -1225,7 +1234,7 @@ function afterChange(g){
   updateHud();
   queueSave();
   if (G.s.pauseLines && G.wait === g.line && G.lineGaps[g.line].every(x => x.locked)) continueListen();
-  if (G.phase === 'playing' && G.gaps.every(x => x.locked || x.dead) && !G.finishing){
+  if (!G.mp && G.phase === 'playing' && G.gaps.every(x => x.locked || x.dead) && !G.finishing){
     G.finishing = true;
     setTimeout(() => { G.finishing = false; endTry(); }, 300);
   }
@@ -1234,6 +1243,7 @@ function onGapKey(e, g){
   if (e.key === 'Enter'){
     e.preventDefault();
     if (G.s.pauseLines && G.wait === g.line){ continueListen(); return; }
+    typedMiss(g);
     focusNext(g.i);
     return;
   }
@@ -1267,11 +1277,11 @@ function pickChoice(g, i){
   if (same(o, g.answer)){ lockGap(g); afterChange(g); focusNext(g.i); }
   else if (G.s.oneShot){
     // ⚡ one shot: the wrong pick stays, this gap is gone for this try
-    g.dead = true; G.misses = (G.misses || 0) + 1;
+    g.dead = true; G.misses = (G.misses || 0) + 1; mpScore('miss', g);
     flashBad(g); g.input.classList.add('dead');
     closeChoice(); afterChange(g); focusNext(g.i);
   }
-  else { (g.wrong ||= new Set()).add(i); G.misses = (G.misses || 0) + 1; flashBad(g); openChoice(g); afterChange(g); }
+  else { (g.wrong ||= new Set()).add(i); G.misses = (G.misses || 0) + 1; mpScore('miss', g); flashBad(g); openChoice(g); afterChange(g); }
 }
 window.addEventListener('resize', closeChoice);
 document.addEventListener('mousedown', e => {
@@ -1283,7 +1293,7 @@ function hint(g){
   if (G.phase !== 'playing') return;
   g = g && playable(g) ? g : (G.focus && playable(G.focus) ? G.focus : G.gaps.find(playable));
   if (!g) return;
-  G.hints++; g.hinted = true;
+  G.hints++; g.hinted = true; mpScore('hint', g);
   if (G.s.mode === 'choice'){
     const wrongIdx = g.options.map((o, i) => i).filter(i => !same(g.options[i], g.answer) && !g.wrong?.has(i));
     if (wrongIdx.length) (g.wrong ||= new Set()).add(wrongIdx[0]);
@@ -1328,7 +1338,7 @@ $('tabSolution').onclick = () => showTab('solution');
 
 // ---------- autosave ----------
 function saveProgress(){
-  if (!G.active || G.done) return;
+  if (!G.active || G.done || G.mp) return;
   store.set('progress', {
     s: G.s, session: G.session, hints: G.hints, played: G.played, at: Date.now(),
     tryNo: G.tryNo, tries: G.tries, lastChance: G.lastChance, reach: G.reach, rewinds: G.rewinds, xpTotal: G.xpTotal,
@@ -1341,7 +1351,7 @@ function saveProgress(){
 let saveT = 0;
 const queueSave = () => { clearTimeout(saveT); saveT = setTimeout(saveProgress, 500); };
 window.addEventListener('pagehide', saveProgress);
-document.addEventListener('visibilitychange', () => { if (document.hidden) saveProgress(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden){ saveProgress(); mpLeft(); } });
 
 // ---------- controls ----------
 function restart(){
@@ -1369,7 +1379,7 @@ $('restartBtn').onclick = () => {
   if (G.done){ restart(); return; }
   askConfirm('Start a new game?', 'You get new random gaps and your tries for this game are lost.', '↺ New game', restart);
 };
-$('newBtn').onclick = () => showView('play');
+$('newBtn').onclick = () => G.mp ? askLeaveRoom() : showView('play');
 $('contBtn').onclick = () => continueListen();
 
 // =====================================================================
@@ -1429,6 +1439,7 @@ async function setupPlayer(id){
           if (G.wait >= 0) continueListen(true);
         }
         if (e.data === 0 && G.phase === 'playing' && G.heard) endTry();    // song finished → try finished
+        mpHostPlayState(e.data);
       }
     }
   });
@@ -1456,6 +1467,7 @@ function poll(){
     $('npCur').textContent = fmtTime(t);
     $('npDur').textContent = fmtTime(dur);
   }
+  mpHostClock(t, dur);
   if (!G.s?.times) return;
   const times = G.s.times;
   let cur = -1;
@@ -1482,7 +1494,7 @@ function poll(){
   if (cur !== G.cur){
     G.lineEls[G.cur]?.classList.remove('now'); G.solEls[G.cur]?.classList.remove('now');
     G.cur = cur;
-    if (cur > G.reach && G.phase === 'playing'){ G.reach = cur; applyReach(); queueSave(); }
+    if (cur > G.reach && G.phase === 'playing'){ G.reach = cur; applyReach(); queueSave(); mpHostReach(); }
     if (cur < 0) return;
     G.lineEls[cur].classList.add('now'); G.solEls[cur].classList.add('now');
     if ($('followChk').checked && G.wait < 0){
@@ -1707,7 +1719,7 @@ let modalLocked = false;
 function openModal(...nodes){
   const opts = nodes[0] && !nodes[0].nodeType && typeof nodes[0] === 'object' ? nodes.shift() : {};
   modalLocked = !!opts.locked;
-  $('modal').replaceChildren(...nodes);
+  $('modal').replaceChildren(...nodes.flat(Infinity).filter(n => n != null && n !== false));
   $('overlay').classList.remove('hidden');
   $('modal').querySelector('button')?.focus();
 }
@@ -1743,7 +1755,7 @@ function confetti(){
 // =====================================================================
 let cloud = null;
 const songKey = s => s.src === 'lrclib' ? 'l' + s.id : 'p' + hash36(s.title + '|' + (s.artist || '') + '|' + s.lines.join('\n'));
-const signedIn = () => !!cloud?.state.user;
+const signedIn = () => !!cloud?.state.user && !cloud.state.user.isAnonymous;
 async function doSignIn(){
   if (!cloud){ toast('Accounts are unavailable right now. Check your connection.'); return; }
   try { await cloud.signIn(); }
@@ -1762,7 +1774,8 @@ function liveStreak(p){
 }
 
 function onCloud(st){
-  const u = st.user;
+  const u = st.user && !st.user.isAnonymous ? st.user : null;
+  if (st.ready && !MP.triedRejoin){ MP.triedRejoin = true; tryRejoin(); }
   $('loginBtn').classList.toggle('hidden', !!u);
   $('avatarBtn').classList.toggle('hidden', !u);
   $('streakPill').classList.toggle('hidden', !u || !st.profile);
@@ -1779,7 +1792,8 @@ function onCloud(st){
   if (view === 'library') renderLibrary();
   if (view === 'stats') renderStats();
 }
-import('./cloud.js').then(m => { cloud = m; m.onChange(onCloud); }).catch(e => console.warn('Cloud features unavailable:', e));
+const cloudP = import('./cloud.js').then(m => { cloud = m; m.onChange(onCloud); return m; });
+cloudP.catch(e => console.warn('Cloud features unavailable:', e));
 
 function wall(emoji, title, text){
   return h('div', { class: 'card wall' }, h('div', { class: 'big-emoji', text: emoji }), h('h3', { text: title }), h('p', { text }),
@@ -1933,6 +1947,7 @@ function gameRow(r){
         h('span', { class: 'chip-s' + (r.lastChance && i === scores.length - 1 ? ' last' : ''), title: r.lastChance && i === scores.length - 1 ? 'Last chance' : `Try ${i + 1}` },
           (r.lastChance && i === scores.length - 1 ? '❤️ ' : '') + `${c}/${total}`)])),
     h('div', { class: 'g-meta' },
+      r.multi ? h('span', { class: 'badge synced', text: `👥 #${r.place || '?'} OF ${r.players || '?'} · ${fmtPts(r.points)} PTS` }) : null,
       r.preset ? h('span', { class: 'badge', text: (PRESET_LABEL[r.preset] || r.preset).toUpperCase() }) : null,
       r.mode ? h('span', { class: 'badge', text: r.mode === 'choice' ? 'CHOOSE' : 'TYPE' }) : null,
       h('span', { class: 'badge', text: `${r.tries || 1} ${(r.tries || 1) === 1 ? 'TRY' : 'TRIES'}` }),
@@ -1958,6 +1973,608 @@ function chart(rs){
   return svg;
 }
 // =====================================================================
+// 👥 MULTIPLAYER — one host plays the song, everyone types on their phone
+// Room status: lobby → (spin) → ready → playing ⇄ paused → between → … → final
+// Points: +100 per word (try 2: 70, try 3: 50) × combo, hint −50, miss −30
+// =====================================================================
+const MP = {
+  code: null, role: null, room: null, players: [], unsubRoom: null, unsubPlayers: null,
+  loadedKey: '', loading: '', spinShown: null, modal: null, lobbyBuilt: '', triedRejoin: false,
+  points: 0, combo: 0, hints: 0, misses: 0, left: 0, syncT: 0, confettiDone: false,
+  playlist: store.get('playlist', [])
+};
+const fmtPts = n => Math.round(n || 0).toLocaleString('en-US');
+const comboMult = c => Math.min(3, 1 + Math.floor(Math.max(0, c - 1) / 3) * 0.5);   // ×1, ×1.5 after 3 in a row, ×2 after 6…
+const myId = () => cloud?.myUid?.() || '';
+const roundsOf = r => r.format === 'playlist' ? Math.min(r.rounds || 1, r.songs.length) : 1;
+const whenCloud = () => cloud ? Promise.resolve(cloud) : cloudP;
+function copyText(t){ navigator.clipboard?.writeText(t).then(() => toast('🔗 Link copied!'), () => prompt('Copy this link:', t)); }
+
+// ---------- QR code (small library, loaded only when needed) ----------
+let qrLib = null;
+function makeQR(el, text){
+  (qrLib ||= new Promise((res, rej) => {
+    const sc = h('script', { src: 'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js' });
+    sc.onload = () => res(window.QRCode); sc.onerror = rej; document.head.append(sc);
+  })).then(Q => { el.replaceChildren(); new Q(el, { text, width: 196, height: 196, colorDark: '#0d0e11', colorLight: '#ffffff', correctLevel: Q.CorrectLevel.M }); })
+    .catch(() => { el.textContent = 'Use the code above to join'; });
+}
+
+// ---------- settings & songs for a room ----------
+function roomSettings(){
+  const prefs = store.get('prefs', {});
+  const preset = SETUP.opts ? SETUP.preset : (prefs.preset || 'medium');
+  const mode = SETUP.opts ? SETUP.mode : (prefs.mode === 'choice' ? 'choice' : 'type');
+  const o = SETUP.opts || { ...PRESETS.medium, skipParens: true, ...(prefs.opts || {}), ...(PRESETS[preset] || {}) };
+  return { preset, mode, oneShot: mode === 'choice' && !!(SETUP.opts ? SETUP.oneShot : prefs.oneShot),
+    opts: { density: o.density, minLen: o.minLen, focus: o.focus, firstLetter: !!o.firstLetter, sizeBoxes: !!o.sizeBoxes, skipParens: !!o.skipParens, instant: true } };
+}
+function songFromSetup(){
+  const s = SETUP.song;
+  return { id: s.id, title: s.title, artist: s.artist || '', cover: s.cover || '', duration: s.duration || 0,
+    yt: SETUP.music === 'off' ? '' : (SETUP.yt || ''), alts: Array.isArray(SETUP.cands) ? rankedCands('audio').slice(0, 4).map(c => c.id) : [] };
+}
+function checkSetupSong(){
+  if (!SETUP.song || SETUP.song.src !== 'lrclib'){ toast('Multiplayer works with songs from the search (not pasted lyrics).'); return false; }
+  if (SETUP.music !== 'off' && !SETUP.yt){ toast(SETUP.cands === null ? 'Still finding the music… one second.' : 'Pick a song version or choose “🔇 No music”.'); return false; }
+  return true;
+}
+
+// ---------- 🎡 playlist tray (home screen) ----------
+function savePlaylist(){ store.set('playlist', MP.playlist); renderPlaylist(); }
+function renderPlaylist(){
+  const box = $('playlistTray'), pl = MP.playlist;
+  box.classList.toggle('hidden', !pl.length);
+  if (!pl.length) return;
+  box.replaceChildren(
+    h('div', { class: 'pl-head' }, h('h3', { text: `🎡 Your playlist (${pl.length}/5)` }), h('button', { class: 'link', text: 'Clear', onclick: () => { MP.playlist = []; savePlaylist(); } })),
+    h('div', { class: 'pl-list' }, pl.map((s, i) => h('div', { class: 'pl-item' }, tile(s.title, s.cover),
+      h('div', { class: 'r-info' }, h('div', { class: 'r-title', text: s.title }), h('div', { class: 'r-sub', text: s.artist + (s.yt ? '' : ' · no music') })),
+      h('button', { class: 'tr-x', 'aria-label': 'Remove', text: '✕', onclick: () => { MP.playlist.splice(i, 1); savePlaylist(); } })))),
+    h('button', { class: 'btn primary full', text: pl.length >= 2 ? `🎡 Host a playlist match (${pl.length} songs)` : 'Add at least 2 songs to host a match', disabled: pl.length < 2, onclick: () => openHostModal('playlist') }),
+    h('p', { class: 'hint', style: 'margin:0', text: 'A wheel picks each song at random and only the first try counts. Points add up across songs.' }));
+}
+$('addPlBtn').onclick = () => {
+  if (!checkSetupSong()) return;
+  if (MP.playlist.some(s => s.id === SETUP.song.id)){ toast('This song is already in your playlist.'); return; }
+  if (MP.playlist.length >= 5){ toast('Your playlist is full (5 songs).'); return; }
+  MP.playlist.push(songFromSetup()); savePlaylist();
+  toast(`➕ Added! Your 🎡 playlist has ${MP.playlist.length}/5 songs (see the home screen).`);
+};
+$('hostBtn').onclick = () => { if (checkSetupSong()) openHostModal('single'); };
+
+// ---------- host: create a room ----------
+function openHostModal(kind){
+  const playlist = kind === 'playlist';
+  const songs = playlist ? MP.playlist.slice() : [songFromSetup()];
+  const st = { tries: 2, rounds: Math.min(3, songs.length), hostPlays: false, teams: false, name: store.get('nick', '') || (cloud?.state.user?.displayName || '').split(' ')[0] || '' };
+  const seg = (vals, cur, set, fmt = v => v) => h('div', { class: 'seg', style: `grid-template-columns:repeat(${vals.length},1fr)` },
+    vals.map(v => h('button', { class: v === cur ? 'on' : '', text: fmt(v), onclick: () => { set(v); render(); } })));
+  const render = () => {
+    const nameIn = h('input', { class: 'field', placeholder: 'Your name', maxlength: '20', value: st.name });
+    nameIn.oninput = () => { st.name = nameIn.value; };
+    const teamsChk = h('input', { type: 'checkbox' }); teamsChk.checked = st.teams; teamsChk.onchange = () => { st.teams = teamsChk.checked; };
+    openModal(
+      h('h2', { text: playlist ? '🎡 Host a playlist match' : '👥 Host a room' }),
+      h('p', { class: 'muted', text: playlist ? songs.map(s => s.title).join(' · ') : `${songs[0].title} · ${songs[0].artist}` }),
+      h('div', { class: 'host-form' },
+        playlist
+          ? [h('b', { text: 'Songs to play' }), seg(songs.map((_, i) => i + 1), st.rounds, v => st.rounds = v), h('small', { class: 'muted', text: 'Only the first try counts for each song.' })]
+          : [h('b', { text: 'Tries' }), seg([1, 2, 3], st.tries, v => st.tries = v, v => `${v} ${v === 1 ? 'try' : 'tries'}`)],
+        h('b', { text: 'Your screen' }),
+        seg(['host', 'play'], st.hostPlays ? 'play' : 'host', v => st.hostPlays = v === 'play', v => v === 'host' ? '🖥 Host only' : '🎮 Host & play'),
+        h('small', { class: 'muted', text: st.hostPlays ? 'You play on this screen too, and the live scores show next to the lyrics.' : 'Big screen mode: the song and the live scores, no lyrics (great for a projector).' }),
+        st.hostPlays ? nameIn : null,
+        h('label', { class: 'check' }, teamsChk, ' 👥 Red vs Blue teams')),
+      h('div', { class: 'btns' },
+        h('button', { class: 'btn primary', text: 'Create the room →', onclick: create }),
+        h('button', { class: 'btn', text: 'Cancel', onclick: () => closeModal() })));
+  };
+  const create = async e => {
+    const btn = e.currentTarget; btn.disabled = true; btn.textContent = 'Creating…';
+    try {
+      const c = await whenCloud();
+      await c.ensureUser();
+      const name = (st.name || 'Host').trim().slice(0, 20) || 'Host';
+      if (st.hostPlays) store.set('nick', name);
+      const code = await c.createRoom({
+        status: 'lobby', locked: false, banned: [], hostPlays: st.hostPlays, teams: st.teams, hostName: name,
+        format: playlist ? 'playlist' : 'tries', triesTotal: playlist ? 1 : st.tries, rounds: playlist ? st.rounds : 1,
+        settings: roomSettings(), songs: songs.map(s => ({ ...s, seed: newSeed() })),
+        current: 0, played: [], tryNo: 1, reach: -1, hideBoard: false, spinId: 0
+      });
+      if (st.hostPlays) await c.setPlayer(code, freshPlayer(name));
+      closeModal();
+      enterRoom(code, 'host');
+    } catch (err){ console.error(err); toast('Could not create the room: ' + (err.code || err.message)); btn.disabled = false; btn.textContent = 'Create the room →'; }
+  };
+  render();
+}
+const freshPlayer = name => ({ name, team: null, joinedAt: Date.now(), points: 0, correct: 0, total: 0, hints: 0, misses: 0, combo: 0, left: 0, tries: [] });
+
+// ---------- players: join a room ----------
+$('joinBtn').onclick = () => joinRoom($('joinCode').value);
+$('joinCode').addEventListener('keydown', e => { if (e.key === 'Enter') joinRoom($('joinCode').value); });
+$('joinCode').addEventListener('input', e => { e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''); });
+
+async function joinRoom(raw){
+  const code = String(raw || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (code.length < 4){ toast('Type the room code from the host’s screen.'); return; }
+  try {
+    const c = await whenCloud();
+    await c.ensureUser();
+    const room = await c.getRoom(code);
+    if (!room || room.status === 'closed'){ toast('Room not found. Check the code.'); return; }
+    if ((room.banned || []).includes(c.myUid())){ toast('You were removed from this room.'); return; }
+    if (room.host === c.myUid()){ enterRoom(code, 'host'); return; }
+    const me = await c.getMe(code);
+    if (me){ enterRoom(code, 'player', me); return; }
+    if (room.status !== 'lobby'){ toast('This game has already started.'); return; }
+    if (room.locked){ toast('🔒 The host locked this room.'); return; }
+    askName(async name => {
+      try { await c.setPlayer(code, freshPlayer(name)); enterRoom(code, 'player'); }
+      catch (err){ console.error(err); toast('Could not join (the room may be locked or already playing).'); }
+    });
+  } catch (err){ console.error(err); toast('Could not join: ' + (err.code || err.message)); }
+}
+function askName(cb){
+  const inp = h('input', { class: 'field', placeholder: 'Your name', maxlength: '20', value: store.get('nick', '') || (cloud?.state.user?.isAnonymous ? '' : (cloud?.state.user?.displayName || '').split(' ')[0] || '') });
+  const go = () => { const n = inp.value.trim().slice(0, 20); if (!n){ inp.focus(); return; } store.set('nick', n); closeModal(); cb(n); };
+  inp.addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
+  openModal(h('div', { class: 'big-emoji', text: '👋' }), h('h2', { text: 'What’s your name?' }), h('p', { class: 'muted', text: 'Everyone in the room will see it on the scoreboard.' }), inp,
+    h('div', { class: 'btns' }, h('button', { class: 'btn primary', text: 'Join the room →', onclick: go })));
+  setTimeout(() => { inp.focus(); inp.select(); }, 50);
+}
+
+// ---------- room connection ----------
+function leaveSubs(){ MP.unsubRoom?.(); MP.unsubPlayers?.(); MP.unsubRoom = MP.unsubPlayers = null; }
+function enterRoom(code, role, me){
+  leaveSubs();
+  Object.assign(MP, { code, role, room: null, players: [], loadedKey: '', loading: '', spinShown: null, modal: null, lobbyBuilt: '', confettiDone: false,
+    points: me?.points || 0, combo: 0, hints: me?.hints || 0, misses: me?.misses || 0, left: me?.left || 0 });
+  store.set('room', { code, role });
+  showView('room');
+  $('roomBody').replaceChildren(h('div', { class: 'empty', text: 'Connecting to the room…' }));
+  MP.unsubRoom = cloud.watchRoom(code, onRoom, e => { console.error(e); toast('Lost the connection to the room.'); });
+  MP.unsubPlayers = cloud.watchPlayers(code, onPlayers, console.error);
+}
+async function tryRejoin(){
+  const saved = store.get('room', null);
+  if (!saved?.code || !cloud?.myUid()) return;
+  try {
+    const room = await cloud.getRoom(saved.code);
+    if (!room || room.status === 'closed' || room.status === 'final'){ store.del('room'); return; }
+    if (room.host === cloud.myUid()){ enterRoom(saved.code, 'host'); return; }
+    const me = await cloud.getMe(saved.code);
+    if (me) enterRoom(saved.code, 'player', me); else store.del('room');
+  } catch { /* offline: ignore */ }
+}
+function askLeaveRoom(){
+  const host = MP.role === 'host';
+  askConfirm(host ? 'Close the room?' : 'Leave the room?', host ? 'The game ends for everyone.' : 'You can come back with the code while the room is still in the lobby.', '🚪 ' + (host ? 'Close room' : 'Leave'), leaveRoom);
+}
+async function leaveRoom(){
+  const code = MP.code, role = MP.role, status = MP.room?.status;
+  leaveSubs(); store.del('room'); closeModal(true);
+  Object.assign(MP, { code: null, role: null, room: null, players: [], modal: null });
+  if (G.mp){ G.active = false; G.mp = null; destroyPlayer(); }
+  showView('play');
+  try {
+    if (role === 'host') await cloud.updateRoom(code, { status: 'closed' });
+    else if (status === 'lobby') await cloud.leavePlayer(code);
+  } catch {}
+}
+function endRoom(msg){
+  const keepView = G.mp && G.done;     // after the podium you can stay on the solution
+  leaveSubs(); store.del('room');
+  Object.assign(MP, { code: null, role: null, room: null, modal: null });
+  if (keepView){ toast(msg); return; }
+  closeModal(true);
+  if (G.mp){ G.active = false; G.mp = null; destroyPlayer(); }
+  showView('play');
+  openModal(h('div', { class: 'big-emoji', text: '👋' }), h('h2', { text: 'Room closed' }), h('p', { class: 'muted', text: msg }),
+    h('div', { class: 'btns' }, h('button', { class: 'btn primary', text: 'OK', onclick: () => closeModal() })));
+}
+function renderRoomCard(){
+  const box = $('continueCard'), r = MP.room;
+  box.replaceChildren(
+    h('div', { class: 'tile', style: '--h:280', text: '👥' }),
+    h('div', { class: 'c-info' }, h('small', { text: 'You’re in a room' }), h('b', { text: `Room ${MP.code}` }), h('small', { text: r ? ({ lobby: 'Waiting in the lobby', final: 'Game over' }[r.status] || 'Game in progress') : 'Connecting…' })),
+    h('button', { class: 'btn primary', text: 'Back to the room →', onclick: goRoom }),
+    h('button', { class: 'x', title: 'Leave the room', 'aria-label': 'Leave the room', text: '✕', onclick: askLeaveRoom }));
+  box.classList.remove('hidden');
+}
+function goRoom(){ const s = MP.room?.status; showView(!s || s === 'lobby' || s === 'spin' || !G.mp ? 'room' : 'game'); if (s === 'lobby') renderLobby(); }
+
+function onRoom(room){
+  const prev = MP.room;
+  MP.room = room;
+  if (!room || room.status === 'closed'){ endRoom(room ? 'The host closed the room.' : 'This room doesn’t exist any more.'); return; }
+  if (MP.role !== 'host' && (room.banned || []).includes(myId())){ endRoom('The host removed you from the room.'); return; }
+  if (room.status === 'lobby'){
+    if (prev && prev.status !== 'lobby') resetForLobby();
+    if (view !== 'room' && view !== 'library' && view !== 'stats') showView('room');
+    renderLobby();
+  } else if (room.status === 'spin'){
+    if (MP.spinShown !== room.spinId){ MP.spinShown = room.spinId; showView('room'); renderRoomWaiting(); showSpin(room); }
+  } else if (room.status === 'final'){
+    if (G.mp && G.active) mpFinish(); else renderRoomWaiting();
+  } else syncGame(room);
+  renderBoard();
+  if (view === 'play') renderContinue();
+}
+function onPlayers(list){
+  MP.players = list;
+  const r = MP.room, me = list.find(p => p.uid === myId());
+  if (r?.teams && me && !me.team && MP.role !== 'host' || (r?.teams && me && !me.team && MP.role === 'host')){
+    const count = t => list.filter(p => p.team === t).length;
+    cloud.setPlayer(MP.code, { team: count('red') <= count('blue') ? 'red' : 'blue' }).catch(() => {});
+  }
+  if (r?.status === 'lobby') renderLobby();
+  renderBoard();
+}
+function resetForLobby(){
+  closeModal(true);
+  if (G.mp){ G.active = false; G.mp = null; destroyPlayer(); }
+  Object.assign(MP, { points: 0, combo: 0, hints: 0, misses: 0, left: 0, loadedKey: '', spinShown: null, modal: null, lobbyBuilt: '', confettiDone: false });
+  if (MP.role !== 'host' || MP.room?.hostPlays) cloud.setPlayer(MP.code, { points: 0, correct: 0, total: 0, hints: 0, misses: 0, combo: 0, left: 0, tries: [] }).catch(() => {});
+}
+
+// ---------- lobby ----------
+function renderLobby(){
+  const r = MP.room;
+  if (!r || view !== 'room') return;
+  const host = MP.role === 'host';
+  if (MP.lobbyBuilt !== MP.code + ':lobby'){
+    MP.lobbyBuilt = MP.code + ':lobby';
+    const joinUrl = location.origin + location.pathname + '#join=' + MP.code;
+    const qr = h('div', { class: 'qr' });
+    if (host) makeQR(qr, joinUrl);
+    $('roomBody').replaceChildren(
+      h('div', { class: 'page-head' }, h('h2', { text: host ? '👥 Your room' : '👥 You’re in!' }),
+        h('p', { class: 'muted', text: host ? 'Players join on their phones: open the app → “Play with friends” → type the code, or scan the QR.' : 'Get ready! The game starts when the host presses Start.' })),
+      h('div', { class: 'room-grid' },
+        h('div', { class: 'card room-code' },
+          h('small', { text: 'ROOM CODE' }), h('div', { class: 'code', text: MP.code }),
+          host ? qr : null,
+          host ? h('button', { class: 'btn small', text: '🔗 Copy the invite link', onclick: () => copyText(joinUrl) }) : null),
+        h('div', { class: 'card lobby-main' }, h('div', { id: 'lobbyInfo' }), h('div', { id: 'lobbyPlayers' }), h('div', { id: 'lobbyActions', class: 'btns' }))));
+  }
+  // what we're playing
+  const s = r.settings || {};
+  $('lobbyInfo').replaceChildren(
+    h('div', { class: 'lobby-songs' }, r.songs.map(x => h('div', { class: 'lobby-song' }, tile(x.title, x.cover), h('div', { class: 'r-info' }, h('div', { class: 'r-title', text: x.title }), h('div', { class: 'r-sub', text: x.artist }))))),
+    h('div', { class: 'res-stats', style: 'justify-content:flex-start;margin:10px 0 4px' },
+      h('span', { class: 'pill', text: r.format === 'playlist' ? `🎡 ${roundsOf(r)} of ${r.songs.length} songs · 1 try each` : `🔁 ${r.triesTotal} ${r.triesTotal === 1 ? 'try' : 'tries'}` }),
+      h('span', { class: 'pill', text: PRESET_LABEL[s.preset] || 'Custom' }),
+      h('span', { class: 'pill', text: (s.mode === 'choice' ? '🎯 Choose' : '✍️ Type') + (s.oneShot ? ' · ⚡ one shot' : '') }),
+      r.teams ? h('span', { class: 'pill', text: '🔴 vs 🔵 teams' }) : null,
+      r.locked ? h('span', { class: 'pill', text: '🔒 Locked' }) : null));
+  // players
+  const list = MP.players.slice().sort((a, b) => (a.joinedAt || 0) - (b.joinedAt || 0));
+  const me = myId();
+  $('lobbyPlayers').replaceChildren(...[
+    h('h3', { text: `Players (${list.length})` }),
+    list.length ? h('ul', { class: 'lobby-list' }, list.map(p => h('li', null,
+      r.teams ? h('i', { class: 'dot ' + (p.team || '') }) : null,
+      h('span', { class: 'nm', text: p.name }),
+      p.uid === r.host ? h('span', { class: 'badge', text: 'HOST' }) : null,
+      p.uid === me ? h('span', { class: 'badge synced', text: 'YOU' }) : null,
+      host && p.uid !== me ? h('button', { class: 'tr-x', title: 'Remove from the room', 'aria-label': 'Remove ' + p.name, text: '✕',
+        onclick: () => askConfirm(`Remove ${p.name}?`, 'They leave the room and can’t join again with this code.', '✕ Remove', () => cloud.kickPlayer(MP.code, p.uid).catch(console.error)) }) : null)))
+      : h('p', { class: 'muted', text: 'Nobody yet… share the code!' }),
+    r.teams && list.some(p => p.uid === me) ? h('div', { class: 'row', style: 'margin-top:10px' },
+      h('button', { class: 'btn small team-btn red', text: '🔴 Join Red', onclick: () => cloud.setPlayer(MP.code, { team: 'red' }) }),
+      h('button', { class: 'btn small team-btn blue', text: '🔵 Join Blue', onclick: () => cloud.setPlayer(MP.code, { team: 'blue' }) })) : null].filter(Boolean));
+  // actions
+  $('lobbyActions').replaceChildren(...(host ? [
+    h('button', { class: 'btn primary big', text: '▶ Start the game', disabled: !list.length, onclick: hostStartGame }),
+    h('div', { class: 'row' },
+      h('button', { class: 'btn small', text: r.locked ? '🔓 Unlock room' : '🔒 Lock room', onclick: () => cloud.updateRoom(MP.code, { locked: !r.locked }) }),
+      h('button', { class: 'btn small', text: r.teams ? '👤 No teams' : '👥 Teams', onclick: () => cloud.updateRoom(MP.code, { teams: !r.teams }) }),
+      h('button', { class: 'btn small', text: '🚪 Close room', onclick: askLeaveRoom }))
+  ] : [
+    h('div', { class: 'yt-loading' }, h('span', { class: 'spinner' }), 'Waiting for the host to start…'),
+    h('button', { class: 'btn small', text: '🚪 Leave the room', onclick: askLeaveRoom })
+  ]));
+}
+function renderRoomWaiting(){
+  MP.lobbyBuilt = '';
+  $('roomBody').replaceChildren(h('div', { class: 'page-head' }, h('h2', { text: `👥 Room ${MP.code}` })), h('div', { class: 'card' }, h('h3', { text: '🏆 Scores so far' }), boardEl(50)));
+}
+function hostStartGame(){
+  const r = MP.room;
+  if (r.format === 'playlist') mpSpin(false);
+  else cloud.updateRoom(MP.code, { status: 'ready', current: 0, tryNo: 1, reach: -1, hideBoard: false });
+}
+
+// ---------- 🎡 the wheel (playlist) ----------
+function mpSpin(afterSong){
+  const r = MP.room;
+  const played = afterSong ? [...(r.played || []), r.current] : [];
+  const left = r.songs.map((_, i) => i).filter(i => !played.includes(i));
+  if (!left.length || played.length >= roundsOf(r)){ cloud.updateRoom(MP.code, { status: 'final', played }); return; }
+  const idx = left[Math.floor(Math.random() * left.length)];
+  cloud.updateRoom(MP.code, { status: 'spin', current: idx, played, spinId: (r.spinId || 0) + 1, tryNo: 1, reach: -1, hideBoard: false });
+}
+function showSpin(room){
+  const left = room.songs.map((s, i) => ({ s, i })).filter(x => !(room.played || []).includes(x.i));
+  const tiles = left.map(x => h('div', { class: 'spin-tile' }, tile(x.s.title, x.s.cover, 'md'), h('b', { text: x.s.title }), h('small', { text: x.s.artist })));
+  const note = h('p', { class: 'muted', text: 'Spinning…' });
+  openModal({ locked: true }, h('h2', { text: `🎡 Song ${(room.played || []).length + 1} of ${roundsOf(room)}` }), h('div', { class: 'spin-grid' }, tiles), note);
+  const target = left.findIndex(x => x.i === room.current);
+  const steps = left.length * 3 + target;
+  let k = 0;
+  const tick = () => {
+    tiles.forEach(t => t.classList.remove('on'));
+    tiles[k % tiles.length].classList.add('on');
+    if (k >= steps){
+      tiles[target].classList.add('picked');
+      note.textContent = `🎶 ${room.songs[room.current].title}!`;
+      if (MP.role === 'host') setTimeout(() => { if (MP.room?.status === 'spin') cloud.updateRoom(MP.code, { status: 'ready', tryNo: 1, reach: -1, hideBoard: false }); }, 1800);
+      return;
+    }
+    k++;
+    setTimeout(tick, 70 + Math.pow(k / steps, 3) * 420);
+  };
+  tick();
+}
+
+// ---------- loading the song & following the host ----------
+async function syncGame(room){
+  const song = room.songs[room.current];
+  const key = MP.code + '|' + room.current + '|' + song.seed;
+  if (MP.loadedKey !== key){
+    if (MP.loading === key) return;
+    MP.loading = key;
+    try {
+      const full = await fetchSong(song.id);
+      const s = room.settings;
+      const host = MP.role === 'host';
+      startGame({
+        src: 'lrclib', id: song.id, title: song.title, artist: song.artist, cover: song.cover, duration: song.duration,
+        lines: full.lines, times: full.times, preset: s.preset, mode: s.mode, oneShot: s.oneShot, opts: s.opts,
+        seed: song.seed, yt: host ? song.yt : '', ytAlts: song.alts || [], mpMusic: !!song.yt, pauseLines: false, offset: 0
+      }, null, { role: MP.role, code: MP.code, hostOnly: host && !room.hostPlays });
+      MP.loadedKey = key;
+      // joining (or reloading) in the middle of a game: line up with the room's try
+      const doneTries = (MP.room.tryNo || 1) - 1 + (MP.room.status === 'between' ? 1 : 0);
+      if (doneTries){ G.tries = Array.from({ length: doneTries }, (_, i) => ({ n: i + 1, correct: 0 })); G.tryNo = doneTries + 1; }
+      if (MP.room.status === 'between'){ G.phase = 'between'; showBetween(); }
+      updateHud();
+    } catch (e){ console.error(e); toast('Could not load the song for this room.'); MP.loading = ''; return; }
+    MP.loading = '';
+    return syncGame(MP.room);
+  }
+  if (view === 'room') showView('game');
+  if (MP.role === 'host') return;                 // the host's own game drives the room
+
+  if ((room.reach ?? -1) > G.reach){
+    G.reach = room.reach; applyReach();
+    G.lineEls.forEach((el, i) => el.classList.toggle('now', i === G.reach));
+  }
+  if ((room.status === 'playing' || room.status === 'paused') && G.phase !== 'playing' && !G.done && G.tries.length < room.tryNo){
+    if (G.optionsReady && !G.optionsDone) await G.optionsReady;
+    if (!['playing', 'paused'].includes(MP.room?.status)) return;
+    MP.modal = null; closeModal(true); beginTry();
+  }
+  if (G.phase === 'playing'){
+    const paused = MP.room.status === 'paused';
+    if (paused !== !!G.mpPaused){ G.mpPaused = paused; setInputsEnabled(!paused); $('mpPaused').classList.toggle('hidden', !paused); }
+  }
+  if (room.status === 'between' && G.phase === 'playing' && G.tries.length < room.tryNo) mpEndTry();
+}
+
+function mpShowReady(){
+  G.phase = 'ready'; setInputsEnabled(false); updateHud();
+  const r = MP.room, host = MP.role === 'host';
+  const title = r.format === 'playlist' ? `Song ${(r.played || []).length + 1} of ${roundsOf(r)}` : `Try ${G.tryNo} of ${r.triesTotal}`;
+  let btn;
+  if (host){
+    btn = h('button', { class: 'btn primary big', text: '▶ Start the song for everyone', onclick: mpHostStartTry });
+    if (G.optionsReady && !G.optionsDone){ btn.disabled = true; btn.textContent = '⏳ Preparing…'; G.optionsReady.then(() => { btn.disabled = false; btn.textContent = '▶ Start the song for everyone'; }); }
+  } else btn = h('div', { class: 'yt-loading' }, h('span', { class: 'spinner' }), 'Get ready… the host starts the song');
+  MP.modal = 'ready';
+  openModal({ locked: true },
+    h('div', { class: 'big-emoji', text: '👥' }), h('h2', { text: title }),
+    h('p', { class: 'muted', text: `${G.s.title} · ${G.s.artist}` }),
+    h('p', { class: 'hint', text: G.mp.hostOnly ? 'The song plays on this screen. Players type on their phones, the live scores show here.'
+      : '+100 per word (combos multiply!) · hint −50 · wrong word −30. Lines unlock as the song plays.' }),
+    h('div', { class: 'btns' }, btn),
+    h('button', { class: 'link', text: host ? '🚪 Close the room' : '🚪 Leave the room', onclick: askLeaveRoom }));
+}
+function mpHostStartTry(){
+  MP.modal = null; closeModal(true);
+  beginTry();                                      // start the music right away (needs the click)
+  cloud.updateRoom(MP.code, { status: 'playing', tryNo: G.tryNo, hideBoard: false }).catch(console.error);
+}
+function mpHostPlayState(state){
+  if (!G.mp || MP.role !== 'host' || G.phase !== 'playing' || !G.heard) return;
+  const st = MP.room?.status;
+  if (state === 1 && st === 'paused') cloud.updateRoom(MP.code, { status: 'playing' });
+  if (state === 2 && st === 'playing') cloud.updateRoom(MP.code, { status: 'paused' });
+}
+function mpHostReach(){ if (G.mp && MP.role === 'host') cloud.updateRoom(MP.code, { reach: G.reach }).catch(() => {}); }
+function mpHostClock(t, dur){
+  if (!G.mp || MP.role !== 'host' || G.phase !== 'playing' || G.mpHid || !dur || t < dur - 30 || t < 5) return;
+  G.mpHid = true;
+  cloud.updateRoom(MP.code, { hideBoard: true }).catch(() => {});   // 🙈 last 30 seconds: suspense!
+}
+
+function mpEndTry(){
+  pauseVideo(); closeChoice();
+  const correct = lockedCount();
+  G.tries.push({ n: G.tryNo, correct, hints: G.hints - (G.tryStart?.hints || 0), last: false });
+  G.gaps.forEach(g => { if (!g.locked && g.input.value.trim()) flashBad(g); });
+  const xp = awardXp();
+  if (xp && signedIn() && !G.mp.hostOnly) cloud.addXp(xp).catch(() => {});
+  G.tryNo++; G.phase = 'between'; G.mpPaused = false;
+  $('mpPaused').classList.add('hidden');
+  setInputsEnabled(false); updateHud();
+  mpSyncNow();
+  if (MP.role === 'host') cloud.updateRoom(MP.code, { status: 'between', hideBoard: false }).catch(console.error);
+  showBetween();
+}
+function showBetween(){
+  const r = MP.room;
+  if (!r) return;
+  MP.modal = 'between';
+  const host = MP.role === 'host', playlist = r.format === 'playlist';
+  const songNo = (r.played || []).length + 1;
+  const moreTries = !playlist && G.tries.length < r.triesTotal;
+  const moreSongs = playlist && songNo < roundsOf(r);
+  const actions = host ? [
+    moreTries ? h('button', { class: 'btn primary', text: `▶ Start try ${G.tryNo}`, onclick: mpHostStartTry }) : null,
+    moreSongs ? h('button', { class: 'btn primary', text: '🎡 Spin for the next song', onclick: () => { MP.modal = null; closeModal(true); mpSpin(true); } }) : null,
+    h('button', { class: 'btn' + (moreTries || moreSongs ? '' : ' primary'), text: '🏆 Show the podium', onclick: () => { MP.modal = null; closeModal(true); cloud.updateRoom(MP.code, { status: 'final', played: playlist ? [...(r.played || []), r.current] : r.played }); } })
+  ] : [h('div', { class: 'yt-loading' }, h('span', { class: 'spinner' }), 'Waiting for the host…')];
+  openModal({ locked: true },
+    h('h2', { text: playlist ? `Song ${songNo} of ${roundsOf(r)} done!` : `Try ${G.tries.length} of ${r.triesTotal} done!` }),
+    !G.mp.hostOnly ? h('div', { class: 'res-stats' },
+      h('span', { class: 'pill', text: `✅ ${lockedCount()}/${G.gaps.length} words` }),
+      h('span', { class: 'pill', text: `⭐ ${fmtPts(MP.points)} pts` })) : null,
+    h('div', { class: 'modal-board' }, boardEl(10)),
+    h('div', { class: 'btns' }, actions),
+    h('button', { class: 'link', text: host ? '🚪 Close the room' : '🚪 Leave the room', onclick: askLeaveRoom }));
+}
+
+// ---------- 🏆 final podium ----------
+function mpFinish(){
+  if (G.mpFinished) return;
+  G.mpFinished = true;
+  G.phase = 'done'; G.done = true; G.wait = -1;
+  pauseVideo(); closeChoice(); setInputsEnabled(false); applyReach();
+  G.lineEls.forEach((el, i) => { if (G.s.yt && G.s.times && G.parsed[i]) el.classList.add('seek'); });
+  G.solEls.forEach((el, i) => { if (G.s.yt && G.s.times && G.parsed[i]) el.classList.add('seek'); });
+  $('mpPaused').classList.add('hidden');
+  updateHud(); renderBoard();
+  showPodium();
+  // save the match in your private history
+  if (!G.mp.hostOnly && signedIn()){
+    const ranked = rankedPlayers(), place = ranked.findIndex(p => p.uid === myId()) + 1;
+    const d = buildDetail(true), r = MP.room;
+    if (r.format === 'playlist'){ d.title = `🎡 Playlist match (${(r.played || []).length || roundsOf(r)} songs)`; d.artist = r.songs.map(x => x.title).join(', ').slice(0, 200); }
+    cloud.saveResult('mp_' + MP.code + '_' + Date.now().toString(36), { ...d, multi: true, room: MP.code, place, players: ranked.length, points: Math.round(MP.points) }).catch(console.error);
+    const bonus = { 1: 50, 2: 30, 3: 15 }[place] || 0;
+    if (bonus) cloud.addXp(bonus).catch(() => {});
+  }
+}
+function rankedPlayers(){ return MP.players.filter(p => p.name).sort((a, b) => (b.points || 0) - (a.points || 0) || (b.correct || 0) - (a.correct || 0)); }
+function teamTotals(list){ return ['red', 'blue'].map(t => ({ t, pts: list.filter(p => p.team === t).reduce((a, p) => a + (p.points || 0), 0) })); }
+function showPodium(){
+  MP.modal = 'podium';
+  const r = MP.room, ranked = rankedPlayers(), host = MP.role === 'host';
+  const myPlace = ranked.findIndex(p => p.uid === myId()) + 1;
+  const [first, second, third] = ranked;
+  const pod = (p, place) => p ? h('div', { class: 'pod p' + place },
+    h('div', { class: 'pod-medal', text: ['🥇', '🥈', '🥉'][place - 1] }), h('b', { text: p.name }), h('span', { text: fmtPts(p.points) + ' pts' }), h('div', { class: 'pod-bar' }, String(place))) : h('div');
+  const teams = r?.teams ? teamTotals(ranked) : null;
+  const winTeam = teams ? (teams[0].pts === teams[1].pts ? 'tie' : teams[0].pts > teams[1].pts ? 'red' : 'blue') : null;
+  openModal(
+    h('h2', { text: '🏆 Final podium' }),
+    teams ? h('p', { class: 'team-win ' + winTeam, text: winTeam === 'tie' ? `🤝 It’s a tie! ${fmtPts(teams[0].pts)} – ${fmtPts(teams[1].pts)}` : `${winTeam === 'red' ? '🔴 Red' : '🔵 Blue'} team wins! ${fmtPts(teams[0].pts)} – ${fmtPts(teams[1].pts)}` }) : null,
+    h('div', { class: 'podium' }, pod(second, 2), pod(first, 1), pod(third, 3)),
+    ranked.length > 3 ? h('div', { class: 'modal-board' }, boardEl(50)) : null,
+    myPlace ? h('p', { class: 'muted', text: `You finished #${myPlace} of ${ranked.length} with ${fmtPts(MP.points)} points.` }) : null,
+    h('div', { class: 'btns' },
+      h('button', { class: 'btn primary', text: '👁 See the solution', onclick: () => { MP.modal = null; closeModal(); showTab('solution'); } }),
+      host ? h('button', { class: 'btn', text: '🔁 Play again in this room', onclick: rematch }) : null,
+      h('button', { class: 'btn', text: host ? '🚪 Close the room' : '🚪 Leave the room', onclick: leaveRoom })));
+  if (myPlace === 1 && !MP.confettiDone && !matchMedia('(prefers-reduced-motion: reduce)').matches){ MP.confettiDone = true; confetti(); }
+}
+function rematch(){
+  const r = MP.room;
+  cloud.updateRoom(MP.code, { status: 'lobby', played: [], current: 0, tryNo: 1, reach: -1, hideBoard: false, spinId: 0, songs: r.songs.map(s => ({ ...s, seed: newSeed() })) });
+}
+
+// ---------- live scoreboard ----------
+function boardEl(limit = 50, big){
+  const r = MP.room;
+  if (r?.hideBoard && (r.status === 'playing' || r.status === 'paused'))
+    return h('div', { class: 'board-hidden' }, h('div', { class: 'big-emoji', text: '🙈' }), h('b', { text: 'Scores hidden!' }), h('p', { class: 'muted small', text: 'Last 30 seconds… the results come at the end.' }));
+  const ranked = rankedPlayers(), me = myId();
+  const teams = r?.teams ? teamTotals(ranked) : null;
+  return h('div', { class: 'board' + (big ? ' big' : '') },
+    teams ? h('div', { class: 'teams' }, teams.map(x => h('div', { class: 'team ' + x.t }, h('small', { text: x.t === 'red' ? '🔴 Red' : '🔵 Blue' }), h('b', { text: fmtPts(x.pts) })))) : null,
+    ranked.length ? h('ol', { class: 'board-list' }, ranked.slice(0, limit).map((p, i) => h('li', { class: p.uid === me ? 'me' : '' },
+      h('span', { class: 'pl', text: ['🥇', '🥈', '🥉'][i] || String(i + 1) }),
+      r?.teams && p.team ? h('i', { class: 'dot ' + p.team }) : null,
+      h('span', { class: 'nm', text: p.name }),
+      p.left ? h('span', { class: 'left', title: 'Left the game tab during a try', text: '⚠×' + p.left }) : null,
+      (p.combo || 0) >= 4 ? h('span', { class: 'combo', text: '🔥×' + comboMult(p.combo) }) : null,
+      p.total ? h('span', { class: 'ok', text: `${p.correct || 0}/${p.total}` }) : null,
+      h('b', { text: fmtPts(p.points) }))))
+    : h('p', { class: 'muted', text: 'No players yet.' }));
+}
+function renderBoard(){
+  if (G.mp && MP.role === 'host' && MP.code)
+    $('mpBoard').replaceChildren(h('div', { class: 'mpb-head' }, h('b', { text: '🏆 Live scores' }), h('span', { class: 'muted small', text: `Room ${MP.code} · ${MP.players.length} players` })), boardEl(40, G.mp.hostOnly));
+  if ($('overlay').classList.contains('hidden')) return;
+  if (MP.modal === 'between' && G.phase === 'between') showBetween();
+  else if (MP.modal === 'podium') showPodium();
+}
+function mpGameLayout(){
+  const mp = G.mp, hostView = !!mp && mp.role === 'host';
+  $('view-game').classList.toggle('host-only', !!mp?.hostOnly);
+  $('mpBoard').classList.toggle('hidden', !hostView);
+  $('gameGrid').classList.toggle('with-board', hostView);
+  $('mpPaused').classList.add('hidden');
+  if (hostView) renderBoard();
+}
+function mpHud(){
+  const mp = G.mp;
+  $('ptsPill').classList.toggle('hidden', !mp || mp.hostOnly);
+  if (!mp) return;
+  if (!mp.hostOnly) $('ptsPill').textContent = `⭐ ${fmtPts(MP.points)}` + (MP.combo >= 4 ? ` · 🔥×${comboMult(MP.combo)}` : '');
+  const host = mp.role === 'host', r = MP.room;
+  $('endTryBtn').classList.toggle('hidden', !(host && G.phase === 'playing'));
+  $('hintBtn').classList.toggle('hidden', mp.hostOnly || G.phase !== 'playing');
+  if (r) $('tryPill').textContent = G.done ? '🏁 Finished' : r.format === 'playlist'
+    ? `🎡 Song ${(r.played || []).length + 1}/${roundsOf(r)}` : `🔁 Try ${Math.min(G.tryNo, r.triesTotal)}/${r.triesTotal}`;
+}
+
+// ---------- points ----------
+function mpScore(kind, g){
+  if (!G.mp || G.mp.hostOnly || G.phase !== 'playing') return;
+  let delta;
+  if (kind === 'ok'){
+    if (g?.hinted){ MP.combo = 0; delta = 30; }
+    else { MP.combo++; delta = Math.round([100, 70, 50][Math.min(G.tryNo, 3) - 1] * comboMult(MP.combo)); }
+  } else if (kind === 'hint'){ MP.combo = 0; MP.hints++; delta = -50; }
+  else { MP.combo = 0; MP.misses++; delta = -30; }
+  MP.points = Math.max(0, MP.points + delta);
+  if (g?.input) floatPts(g, delta);
+  mpHud(); queuePlayerSync();
+}
+// typing mode: a finished wrong word (Enter, or leaving a full-length word) counts as a miss
+function typedMiss(g){
+  if (!G.mp || G.phase !== 'playing' || g.locked || G.s.mode === 'choice') return;
+  const v = g.input.value.trim();
+  if (!v || same(v, g.answer) || v === g.lastMiss) return;
+  g.lastMiss = v; flashBad(g); mpScore('miss', g);
+}
+function floatPts(g, delta){
+  const r = g.input.getBoundingClientRect();
+  const el = h('div', { class: 'float-pts ' + (delta >= 0 ? 'up' : 'down'), text: (delta >= 0 ? '+' : '') + delta + (delta > 0 && MP.combo >= 4 ? ` 🔥×${comboMult(MP.combo)}` : '') });
+  el.style.left = (r.left + r.width / 2 + scrollX) + 'px';
+  el.style.top = (r.top + scrollY - 6) + 'px';
+  document.body.append(el);
+  setTimeout(() => el.remove(), 1100);
+}
+function mpLeft(){
+  if (!G.mp || G.mp.hostOnly || G.phase !== 'playing' || !MP.code) return;
+  MP.left++;
+  cloud.setPlayer(MP.code, { left: MP.left }).catch(() => {});
+}
+const playerData = () => ({ points: Math.round(MP.points), correct: G.gaps.length ? lockedCount() : 0, total: G.gaps.length, hints: MP.hints, misses: MP.misses, combo: MP.combo, left: MP.left, tries: G.tries.map(t => t.correct).slice(0, 20) });
+function queuePlayerSync(){ clearTimeout(MP.syncT); MP.syncT = setTimeout(mpSyncNow, 1200); }
+function mpSyncNow(){
+  clearTimeout(MP.syncT);
+  if (!MP.code || !G.mp || G.mp.hostOnly) return;
+  cloud.setPlayer(MP.code, playerData()).catch(console.error);
+}
+
+// =====================================================================
 // PWA: offline cache + install button
 // =====================================================================
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')){
@@ -1971,5 +2588,15 @@ $('installBtn').onclick = async () => { if (!installEvt) return; installEvt.prom
 // boot
 // =====================================================================
 renderContinue();
+renderPlaylist();
 openShared();
+function openJoinLink(){
+  const m = location.hash.match(/^#join=([A-Za-z0-9]+)/);
+  if (!m) return;
+  history.replaceState(null, '', location.pathname + location.search);
+  $('joinCode').value = m[1].toUpperCase();
+  joinRoom(m[1]);
+}
+openJoinLink();
+window.addEventListener('hashchange', openJoinLink);
 window.addEventListener('hashchange', openShared);

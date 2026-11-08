@@ -1,6 +1,6 @@
 // Service worker: makes the app installable and lets it open offline.
 // Network first (so updates on GitHub show up right away), cache as fallback.
-const CACHE = 'lgc-v3';
+const CACHE = 'lgc-v4';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'cloud.js', 'manifest.webmanifest',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png'];
 

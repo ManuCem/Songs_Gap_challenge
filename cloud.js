@@ -1,9 +1,9 @@
 // Firebase: Google login, results, XP/streak, library and leaderboards.
 // Loaded lazily by app.js — if this file fails to load, the game still works offline.
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut as fbSignOut, onAuthStateChanged }
+import { getAuth, GoogleAuthProvider, signInWithPopup, signInAnonymously, signOut as fbSignOut, onAuthStateChanged }
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-import { getFirestore, doc, getDoc, setDoc, deleteDoc, serverTimestamp, collection, query, orderBy, limit, getDocs }
+import { getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, serverTimestamp, collection, query, orderBy, limit, getDocs, onSnapshot, arrayUnion }
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 // Public web config (safe to publish; access is controlled by the Firestore security rules)
@@ -29,7 +29,7 @@ onAuthStateChanged(auth, async u => {
   state.user = u; state.profile = null; state.results = []; state.library = new Map();
   state.ready = true;
   emit();
-  if (u){
+  if (u && !u.isAnonymous){
     const r = await Promise.allSettled([loadProfile(), loadLibrary(), loadResults()]);
     r.forEach(x => x.status === 'rejected' && console.error(x.reason));
     emit();
@@ -138,4 +138,42 @@ export async function submitScore(board, pct, tries, hints){
 export async function topScores(board, n = 5){
   const snap = await getDocs(query(collection(db, 'leaderboards', board, 'scores'), orderBy('rank', 'desc'), limit(n)));
   return snap.docs.map(d => ({ uid: d.id, me: d.id === uid(), ...d.data() }));
+}
+
+// ---------- 👥 multiplayer rooms ----------
+// Guests play with an anonymous account (no Google login needed).
+export const myUid = () => auth.currentUser?.uid || '';
+export async function ensureUser(){
+  if (auth.currentUser) return auth.currentUser;
+  return (await signInAnonymously(auth)).user;
+}
+const roomRef = code => doc(db, 'rooms', code);
+const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+export async function createRoom(data){
+  await ensureUser();
+  for (let i = 0; i < 6; i++){
+    const code = Array.from({ length: 5 }, () => CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)]).join('');
+    const ex = await getDoc(roomRef(code));
+    if (ex.exists()) continue;
+    await setDoc(roomRef(code), { ...data, host: myUid(), createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+    return code;
+  }
+  throw new Error('Could not create a room code');
+}
+export async function getRoom(code){
+  const s = await getDoc(roomRef(code));
+  return s.exists() ? { id: s.id, ...s.data() } : null;
+}
+export async function getMe(code){
+  const s = await getDoc(doc(db, 'rooms', code, 'players', myUid()));
+  return s.exists() ? s.data() : null;
+}
+export const watchRoom = (code, cb, err) => onSnapshot(roomRef(code), s => cb(s.exists() ? { id: s.id, ...s.data() } : null), err);
+export const watchPlayers = (code, cb, err) => onSnapshot(collection(db, 'rooms', code, 'players'), s => cb(s.docs.map(d => ({ uid: d.id, ...d.data() }))), err);
+export const updateRoom = (code, patch) => updateDoc(roomRef(code), { ...patch, updatedAt: serverTimestamp() });
+export const setPlayer = (code, data) => setDoc(doc(db, 'rooms', code, 'players', myUid()), { ...data, updatedAt: serverTimestamp() }, { merge: true });
+export const leavePlayer = code => deleteDoc(doc(db, 'rooms', code, 'players', myUid()));
+export async function kickPlayer(code, pid){
+  await updateRoom(code, { banned: arrayUnion(pid) });
+  await deleteDoc(doc(db, 'rooms', code, 'players', pid));
 }

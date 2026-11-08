@@ -801,11 +801,24 @@ function lineFamilies(parsed){
 // hidden twice in repeated lines (see lineFamilies).
 function pickSpread(eligible, n, rand, parsed){
   const fam = lineFamilies(parsed);
+  const famLines = new Map();                   // family → its lines (all copies of a chorus line)
+  fam.forEach((f, li) => { if (f < 0) return; if (!famLines.has(f)) famLines.set(f, []); famLines.get(f).push(li); });
+  const words = li => (parsed[li] || []).filter(t => t.core);
+  const countIn = (li, k) => words(li).filter(t => norm(t.core) === k).length;
+  const gapsIn = new Map();                     // line → visible gaps so far
+  const cap = li => Math.max(1, Math.floor(words(li).length / 2));   // a line is never more than half gaps
   const used = new Map();                       // family → words already hidden in it
   const byLine = new Map();
   eligible.forEach(t => { if (!byLine.has(t.line)) byLine.set(t.line, []); byLine.get(t.line).push(t); });
   const lines = [...byLine.values()].map(arr => shuffle(arr, rand));
+  // n = how many VISIBLE gaps this level should show (chorus copies included)
   let left = n;
+  const fits = (t, f, k) => {
+    if (countIn(t.line, k) > 1) return false;                 // "timeless, timeless, timeless": never hide those
+    const cost = famLines.get(f).reduce((c, li) => c + countIn(li, k), 0);
+    if (cost > left + 1) return false;                        // would blow the level's budget
+    return famLines.get(f).every(li => (gapsIn.get(li) || 0) + countIn(li, k) <= cap(li));
+  };
   while (left > 0){
     let progress = false;
     for (const arr of shuffle([...lines], rand)){
@@ -813,23 +826,21 @@ function pickSpread(eligible, n, rand, parsed){
       const f = fam[arr[0].line];
       if (!used.has(f)) used.set(f, new Set());
       const taken = used.get(f);
-      const free = arr.filter(t => !t.gap && !taken.has(norm(t.core)));
+      const free = arr.filter(t => !t.gap && !taken.has(norm(t.core)) && fits(t, f, norm(t.core)));
       if (!free.length) continue;
       const near = arr.filter(t => t.gap).map(t => t.pos);
       const pick = free.find(t => !near.some(p => Math.abs(p - t.pos) <= 1)) || free[0];
-      pick.gap = true; taken.add(norm(pick.core)); left--; progress = true;
+      // hide this word in EVERY copy of the line (linked: answer once, all copies turn green)
+      const k = norm(pick.core);
+      taken.add(k);
+      for (const li of famLines.get(f)) for (const t of words(li)) if (norm(t.core) === k){
+        t.gap = true; t.unit = f + '|' + k;
+        gapsIn.set(li, (gapsIn.get(li) || 0) + 1); left--;
+      }
+      progress = true;
     }
     if (!progress) break;
   }
-  // Hide each chosen word in EVERY line of its family (all chorus copies, and a repeat in the
-  // same line), linked as one word: answer it once and every copy turns green. Nothing leaks.
-  const famWords = new Map();
-  parsed.forEach(toks => toks?.forEach(t => { if (t.gap){ const f = fam[t.line]; if (!famWords.has(f)) famWords.set(f, new Set()); famWords.get(f).add(norm(t.core)); } }));
-  parsed.forEach((toks, li) => toks?.forEach(t => {
-    if (!t.core) return;
-    const k = norm(t.core);
-    if (famWords.get(fam[li])?.has(k)){ t.gap = true; t.unit = fam[li] + '|' + k; }
-  }));
 }
 
 function startGame(s, restore, mp){
@@ -2117,7 +2128,7 @@ $('createRoomBtn').onclick = () => openHostModal('empty');
 // ---------- host: create a room ----------
 function openHostModal(kind){
   const songs = kind === 'single' ? [songFromSetup()] : [];
-  const st = { hostPlays: false, teams: false, musicAll: true, name: store.get('nick', '') || (cloud?.state.user?.displayName || '').split(' ')[0] || '' };
+  const st = { hostPlays: true, teams: false, musicAll: false, name: store.get('nick', '') || (cloud?.state.user?.displayName || '').split(' ')[0] || '' };
   const render = () => {
     const nameIn = h('input', { class: 'field', placeholder: 'Your name', maxlength: '20', value: st.name });
     nameIn.oninput = () => { st.name = nameIn.value; };

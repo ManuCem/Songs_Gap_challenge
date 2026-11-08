@@ -2144,7 +2144,7 @@ function openHostModal(kind){
       const name = (st.name || 'Host').trim().slice(0, 20) || 'Host';
       if (st.hostPlays) store.set('nick', name);
       const code = await c.createRoom({
-        status: 'lobby', locked: false, banned: [], hostPlays: st.hostPlays, teams: st.teams, musicAll: st.musicAll, hostName: name,
+        status: 'lobby', locked: false, banned: [], hostPlays: st.hostPlays, teams: st.teams, musicAll: st.musicAll, hostName: name, hostPhoto: myPhoto(),
         format: 'tries', triesTotal: 2, rounds: 1, settings: roomSettings(), songs: songs.map(s => ({ ...s, seed: newSeed() })),
         current: 0, played: [], tryNo: 1, reach: -1, hideBoard: false, spinId: 0, songPos: 0, songSeq: 0
       });
@@ -2155,7 +2155,7 @@ function openHostModal(kind){
   };
   render();
 }
-const freshPlayer = name => ({ name, team: null, joinedAt: Date.now(), points: 0, correct: 0, total: 0, hints: 0, misses: 0, combo: 0, left: 0, tries: [] });
+const freshPlayer = name => ({ name, photo: myPhoto(), team: null, joinedAt: Date.now(), points: 0, correct: 0, total: 0, hints: 0, misses: 0, combo: 0, left: 0, tries: [] });
 
 // ---------- players: join a room ----------
 $('joinBtn').onclick = () => joinRoom($('joinCode').value);
@@ -2186,8 +2186,18 @@ function askName(cb){
   const inp = h('input', { class: 'field', placeholder: 'Your name', maxlength: '20', value: store.get('nick', '') || (cloud?.state.user?.isAnonymous ? '' : (cloud?.state.user?.displayName || '').split(' ')[0] || '') });
   const go = () => { const n = inp.value.trim().slice(0, 20); if (!n){ inp.focus(); return; } store.set('nick', n); closeModal(); cb(n); };
   inp.addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
-  openModal(h('div', { class: 'big-emoji', text: '👋' }), h('h2', { text: 'What’s your name?' }), h('p', { class: 'muted', text: 'Everyone in the room will see it on the scoreboard.' }), inp,
-    h('div', { class: 'btns' }, h('button', { class: 'btn primary', text: 'Join the room →', onclick: go })));
+  const google = !!myPhoto();
+  openModal(
+    h('div', { class: 'name-av' }, avatarEl({ uid: myId(), photo: myPhoto() }, 86)),
+    h('h2', { text: 'What’s your name?' }),
+    h('p', { class: 'muted', text: google ? 'Your Google photo is your character in the room.' : 'This is your character. It’s always the same for you!' }),
+    inp,
+    h('div', { class: 'btns' },
+      h('button', { class: 'btn primary', text: 'Join the room →', onclick: go }),
+      google ? null : h('button', { class: 'btn', text: '🔑 Use my Google photo instead', onclick: async () => {
+        await doSignIn();
+        if (signedIn()){ if (!store.get('nick', '')) store.set('nick', (cloud.state.user.displayName || '').split(' ')[0]); askName(cb); }
+      } })));
   setTimeout(() => { inp.focus(); inp.select(); }, 50);
 }
 
@@ -2286,6 +2296,143 @@ function resetForLobby(){
   if (MP.role !== 'host' || MP.room?.hostPlays) cloud.setPlayer(MP.code, { points: 0, correct: 0, total: 0, hints: 0, misses: 0, combo: 0, left: 0, tries: [] }).catch(() => {});
 }
 
+// ---------- 🙂 avatars: your Google photo, or a funny buddy that's always the same for you ----------
+const myPhoto = () => (cloud?.state.user && !cloud.state.user.isAnonymous && cloud.state.user.photoURL) || '';
+function avatarSvg(seed){
+  const r = rng('buddy:' + seed);
+  const pick = a => a[Math.floor(r() * a.length)];
+  const hue = Math.floor(r() * 360);
+  const body = `hsl(${hue} 72% 62%)`, dark = `hsl(${hue} 55% 38%)`, light = `hsl(${hue} 85% 82%)`, acc = `hsl(${(hue + 160) % 360} 75% 55%)`;
+  const shape = pick(['round', 'tall', 'wide']);
+  const eyes = pick(['dots', 'big', 'big', 'sleepy', 'wink']);
+  const mouth = pick(['smile', 'open', 'grin', 'o', 'tongue']);
+  const extra = pick(['none', 'cap', 'headphones', 'glasses', 'bow', 'antenna', 'party']);
+  const bodies = {
+    round: `<ellipse cx="50" cy="62" rx="34" ry="32" fill="${body}"/>`,
+    tall: `<rect x="20" y="24" width="60" height="70" rx="30" fill="${body}"/>`,
+    wide: `<ellipse cx="50" cy="66" rx="40" ry="28" fill="${body}"/>`
+  };
+  const eyeSets = {
+    dots: `<circle cx="39" cy="56" r="4.5" fill="#1b1b22"/><circle cx="61" cy="56" r="4.5" fill="#1b1b22"/>`,
+    big: `<circle cx="38" cy="54" r="10" fill="#fff"/><circle cx="62" cy="54" r="10" fill="#fff"/><g class="pupils"><circle cx="40" cy="56" r="4.6" fill="#1b1b22"/><circle cx="64" cy="56" r="4.6" fill="#1b1b22"/></g>`,
+    sleepy: `<path d="M31 56 Q38 61 45 56 M55 56 Q62 61 69 56" stroke="#1b1b22" stroke-width="3.5" fill="none" stroke-linecap="round"/>`,
+    wink: `<circle cx="38" cy="54" r="10" fill="#fff"/><circle cx="40" cy="56" r="4.6" fill="#1b1b22"/><path d="M55 55 Q62 50 69 55" stroke="#1b1b22" stroke-width="3.5" fill="none" stroke-linecap="round"/>`
+  };
+  const mouths = {
+    smile: `<path d="M42 70 Q50 78 58 70" stroke="#1b1b22" stroke-width="3.2" fill="none" stroke-linecap="round"/>`,
+    open: `<ellipse cx="50" cy="73" rx="6.5" ry="5.5" fill="#3a1414"/>`,
+    grin: `<path d="M40 69 Q50 81 60 69 Z" fill="#3a1414"/><path d="M42 70 H58" stroke="#fff" stroke-width="2.5"/>`,
+    o: `<circle cx="50" cy="73" r="4" fill="#3a1414"/>`,
+    tongue: `<ellipse cx="50" cy="72" rx="7" ry="6" fill="#3a1414"/><ellipse cx="50" cy="75.5" rx="4.5" ry="3" fill="#ff7a93"/>`
+  };
+  const extras = {
+    none: '',
+    cap: `<path d="M26 36 Q50 8 74 36 Z" fill="${acc}"/><path d="M70 34 Q86 34 90 40 L70 40 Z" fill="${acc}"/>`,
+    headphones: `<path d="M20 52 Q20 14 50 14 Q80 14 80 52" stroke="#2a2a33" stroke-width="5" fill="none"/><rect x="12" y="46" width="13" height="20" rx="6" fill="${acc}"/><rect x="75" y="46" width="13" height="20" rx="6" fill="${acc}"/>`,
+    glasses: `<rect x="27" y="45" width="21" height="17" rx="6" fill="none" stroke="#1b1b22" stroke-width="3"/><rect x="52" y="45" width="21" height="17" rx="6" fill="none" stroke="#1b1b22" stroke-width="3"/><path d="M48 52 H52" stroke="#1b1b22" stroke-width="3"/>`,
+    bow: `<path d="M50 28 L36 18 L36 38 Z M50 28 L64 18 L64 38 Z" fill="${acc}"/><circle cx="50" cy="28" r="4" fill="${dark}"/>`,
+    antenna: `<path d="M50 30 L50 12" stroke="${dark}" stroke-width="3"/><circle class="glow" cx="50" cy="10" r="5" fill="${acc}"/>`,
+    party: `<path d="M50 0 L38 30 L62 30 Z" fill="${acc}"/><path d="M44 16 L56 16 M41 24 L59 24" stroke="#fff" stroke-width="2.5"/><circle cx="50" cy="1" r="3.5" fill="#ffd93d"/>`
+  };
+  return `<svg viewBox="0 0 100 104" aria-hidden="true">`
+    + `<ellipse class="foot fl" cx="38" cy="96" rx="9" ry="5.5" fill="${dark}"/><ellipse class="foot fr" cx="62" cy="96" rx="9" ry="5.5" fill="${dark}"/>`
+    + bodies[shape]
+    + `<ellipse cx="50" cy="${shape === 'wide' ? 80 : 82}" rx="17" ry="10" fill="${light}" opacity=".7"/>`
+    + `<circle cx="29" cy="67" r="5" fill="#ff7a93" opacity=".45"/><circle cx="71" cy="67" r="5" fill="#ff7a93" opacity=".45"/>`
+    + `<g class="eyes">${eyeSets[eyes]}</g>` + mouths[mouth] + extras[extra]
+    + `</svg>`;
+}
+function avatarEl(p, size = 40){
+  const box = h('div', { class: 'avatar-img', style: `width:${size}px;height:${size}px` });
+  const buddy = () => { box.innerHTML = avatarSvg(p.uid || p.name || '?'); box.classList.remove('photo'); box.classList.add('buddy'); };
+  if (p.photo){
+    const img = h('img', { src: p.photo, alt: '', referrerpolicy: 'no-referrer' });
+    img.onerror = buddy;
+    box.classList.add('photo'); box.append(img);
+  } else buddy();
+  return box;
+}
+
+// ---------- the lobby stage: characters wander around while everyone waits ----------
+const STAGE = { els: new Map(), timer: 0 };
+// pick a spot on the floor far from the other characters
+function stageBounds(){
+  const W = $('lobbyStage')?.clientWidth || 900;
+  const lo = 50 / W * 100;                                        // keep the whole character inside the stage
+  const dj = [...STAGE.els.values()].some(e => e.dataset.dj);
+  return { lo, hi: 100 - lo - (dj ? 95 / W * 100 : 0), djX: 100 - lo };
+}
+function freeSpot(self, near, span){
+  const { lo, hi } = stageBounds();
+  const others = [...STAGE.els.values()].filter(e => e !== self).map(e => parseFloat(e.style.left) || 50);
+  let best = 50, bestD = -1;
+  for (let i = 0; i < 12; i++){
+    const x = near == null ? lo + Math.random() * (hi - lo) : Math.max(lo, Math.min(hi, near + (Math.random() - 0.5) * span));
+    const d = others.length ? Math.min(...others.map(o => Math.abs(o - x))) : 100;
+    if (d > bestD){ bestD = d; best = x; }
+  }
+  return best;
+}
+const THOUGHTS = ['💭', '🎵', '🎶', '🤔', '😎', '🎤', '👀', '…', '🔥', '😴', '🥁', '🎧', '🙌'];
+function syncStage(list, r){
+  const stage = $('lobbyStage');
+  if (!stage) return;
+  const people = list.map(p => ({ ...p }));
+  if (r && !r.hostPlays) people.push({ uid: r.host, name: r.hostName || 'Host', photo: r.hostPhoto || '', dj: true });
+  const ids = new Set(people.map(p => p.uid));
+  for (const [id, el] of STAGE.els){
+    if (ids.has(id) && el.isConnected) continue;
+    if (el.isConnected){ el.classList.add('bye'); setTimeout(() => el.remove(), 450); }
+    STAGE.els.delete(id);
+  }
+  people.forEach(p => {
+    let el = STAGE.els.get(p.uid);
+    if (!el){
+      el = h('div', { class: 'av new', style: `left:${p.dj ? stageBounds().djX : freeSpot(null)}%` },
+        h('div', { class: 'bubble' }), h('div', { class: 'fig' }), h('div', { class: 'shadow' }), h('div', { class: 'tag' }));
+      el.dataset.next = Date.now() + 600 + Math.random() * 2500;
+      el.dataset.dj = p.dj ? '1' : '';
+      if (p.uid === myId()) el.addEventListener('click', () => hop(el, ['🎉', '😄', '🙌', '💃', '🕺', '👋'][Math.floor(Math.random() * 6)]));
+      stage.append(el); STAGE.els.set(p.uid, el);
+      setTimeout(() => el.classList.remove('new'), 800);
+    }
+    el.classList.toggle('me', p.uid === myId());
+    el.classList.remove('red', 'blue');
+    if (r?.teams && p.team) el.classList.add(p.team);
+    el.querySelector('.tag').textContent = (p.dj ? '🎧 ' : '') + p.name + (p.uid === myId() ? ' (you)' : '');
+    const fig = el.querySelector('.fig');
+    if (fig.dataset.photo !== (p.photo || '') || !fig.firstChild){ fig.dataset.photo = p.photo || ''; fig.replaceChildren(avatarEl(p, 76)); }
+  });
+  stage.classList.toggle('empty', !people.length);
+  if (!STAGE.timer) STAGE.timer = setInterval(stageTick, 400);
+}
+function stageTick(){
+  const stage = $('lobbyStage');
+  if (!stage || !stage.isConnected || view !== 'room'){ clearInterval(STAGE.timer); STAGE.timer = 0; return; }
+  const now = Date.now();
+  for (const el of STAGE.els.values()){
+    if (now < +el.dataset.next) continue;
+    const roll = Math.random();
+    if (roll < 0.6 && !el.dataset.dj){                  // walk somewhere (not on top of someone)
+      const from = parseFloat(el.style.left) || 50;
+      const to = freeSpot(el, from, 60);
+      el.classList.toggle('flip', to < from);
+      el.classList.add('walking');
+      el.style.left = to + '%';
+      setTimeout(() => el.classList.remove('walking'), 1900);
+      el.dataset.next = now + 1900 + Math.random() * 1800;
+    } else if (roll < 0.85){                            // think about something
+      think(el, THOUGHTS[Math.floor(Math.random() * THOUGHTS.length)]);
+      el.dataset.next = now + 1800 + Math.random() * 1800;
+    } else {                                            // little hop
+      hop(el);
+      el.dataset.next = now + 1500 + Math.random() * 2000;
+    }
+  }
+}
+function think(el, txt){ const b = el.querySelector('.bubble'); b.textContent = txt; b.classList.remove('show'); void b.offsetWidth; b.classList.add('show'); }
+function hop(el, txt){ el.classList.remove('hop'); void el.offsetWidth; el.classList.add('hop'); if (txt) think(el, txt); }
+
 // ---------- lobby ----------
 function renderLobby(){
   const r = MP.room;
@@ -2299,6 +2446,7 @@ function renderLobby(){
     $('roomBody').replaceChildren(
       h('div', { class: 'page-head' }, h('h2', { text: host ? '👥 Your room' : '👥 You’re in!' }),
         h('p', { class: 'muted', text: host ? 'Players join on their phones: open the app → “Play with friends” → type the code, or scan the QR.' : 'Get ready! The game starts when the host presses Start.' })),
+      h('div', { class: 'stage', id: 'lobbyStage' }, h('div', { class: 'stage-floor' })),
       h('div', { class: 'room-grid' },
         h('div', { class: 'card room-code' },
           h('small', { text: 'ROOM CODE' }), h('div', { class: 'code', text: MP.code }),
@@ -2335,6 +2483,7 @@ function renderLobby(){
   $('lobbyPlayers').replaceChildren(...[
     h('h3', { text: `Players (${list.length})` }),
     list.length ? h('ul', { class: 'lobby-list' }, list.map(p => h('li', null,
+      avatarEl(p, 24),
       r.teams ? h('i', { class: 'dot ' + (p.team || '') }) : null,
       h('span', { class: 'nm', text: p.name }),
       p.uid === r.host ? h('span', { class: 'badge', text: 'HOST' }) : null,
@@ -2345,6 +2494,7 @@ function renderLobby(){
     r.teams && list.some(p => p.uid === me) ? h('div', { class: 'row', style: 'margin-top:10px' },
       h('button', { class: 'btn small team-btn red', text: '🔴 Join Red', onclick: () => cloud.setPlayer(MP.code, { team: 'red' }) }),
       h('button', { class: 'btn small team-btn blue', text: '🔵 Join Blue', onclick: () => cloud.setPlayer(MP.code, { team: 'blue' }) })) : null].filter(Boolean));
+  syncStage(list, r);
   // actions
   $('lobbyActions').replaceChildren(...(host ? [
     h('button', { class: 'btn primary big', text: songs.length ? '▶ Start the game' : '🎵 Choose a song first', disabled: !list.length || !songs.length, onclick: hostStartGame }),
@@ -2590,7 +2740,7 @@ function showPodium(){
   const myPlace = ranked.findIndex(p => p.uid === myId()) + 1;
   const [first, second, third] = ranked;
   const pod = (p, place) => p ? h('div', { class: 'pod p' + place },
-    h('div', { class: 'pod-medal', text: ['🥇', '🥈', '🥉'][place - 1] }), h('b', { text: p.name }), h('span', { text: fmtPts(p.points) + ' pts' }), h('div', { class: 'pod-bar' }, String(place))) : h('div');
+    h('div', { class: 'pod-av' + (place === 1 ? ' winner' : '') }, avatarEl(p, place === 1 ? 64 : 50)), h('div', { class: 'pod-medal', text: ['🥇', '🥈', '🥉'][place - 1] }), h('b', { text: p.name }), h('span', { text: fmtPts(p.points) + ' pts' }), h('div', { class: 'pod-bar' }, String(place))) : h('div');
   const teams = r?.teams ? teamTotals(ranked) : null;
   const winTeam = teams ? (teams[0].pts === teams[1].pts ? 'tie' : teams[0].pts > teams[1].pts ? 'red' : 'blue') : null;
   openModal(
@@ -2622,6 +2772,7 @@ function boardEl(limit = 50, big){
     teams ? h('div', { class: 'teams' }, teams.map(x => h('div', { class: 'team ' + x.t }, h('small', { text: x.t === 'red' ? '🔴 Red' : '🔵 Blue' }), h('b', { text: fmtPts(x.pts) })))) : null,
     ranked.length ? h('ol', { class: 'board-list' }, ranked.slice(0, limit).map((p, i) => h('li', { class: p.uid === me ? 'me' : '' },
       h('span', { class: 'pl', text: ['🥇', '🥈', '🥉'][i] || String(i + 1) }),
+      avatarEl(p, big ? 34 : 24),
       r?.teams && p.team ? h('i', { class: 'dot ' + p.team }) : null,
       h('span', { class: 'nm', text: p.name }),
       p.left ? h('span', { class: 'left', title: 'Left the game tab during a try', text: '⚠×' + p.left }) : null,

@@ -63,9 +63,10 @@ service cloud.firestore {
     match /rooms/{code} {
       function room() { return get(/databases/$(database)/documents/rooms/$(code)).data; }
       function validPlayer() {
-        return d().keys().hasOnly(['name', 'team', 'joinedAt', 'points', 'correct', 'total', 'hints', 'misses',
+        return d().keys().hasOnly(['name', 'photo', 'team', 'joinedAt', 'points', 'correct', 'total', 'hints', 'misses',
                                    'combo', 'left', 'tries', 'updatedAt'])
           && d().name is string && d().name.size() > 0 && d().name.size() <= 24
+          && (!('photo' in d()) || (d().photo is string && d().photo.size() <= 600))
           && (!('points' in d()) || d().points is number)
           && (!('tries' in d()) || (d().tries is list && d().tries.size() <= 20));
       }

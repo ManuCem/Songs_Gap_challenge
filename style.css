@@ -607,3 +607,52 @@ body:has(.game-grid.with-side) .wrap{max-width:1440px}
 #createRoomBtn{justify-self:start}
 
 .lobby-fmt{display:grid;gap:6px;margin-top:10px}
+
+/* ================= 🙂 avatars & the lobby stage ================= */
+.avatar-img{flex:none;display:grid;place-items:center;border-radius:50%;overflow:visible}
+.avatar-img svg{width:100%;height:100%;overflow:visible}
+.avatar-img.photo{overflow:hidden;box-shadow:0 0 0 2px var(--surface),0 0 0 4px var(--accent-line)}
+.avatar-img.photo img{width:100%;height:100%;object-fit:cover;display:block}
+.avatar-img .eyes{transform-box:fill-box;transform-origin:center;animation:blink 4.2s infinite}
+.avatar-img .glow{animation:glow 1.4s ease-in-out infinite}
+@keyframes blink{0%,94%,100%{transform:scaleY(1)}96%{transform:scaleY(.1)}}
+@keyframes glow{50%{opacity:.4}}
+.name-av{display:grid;place-items:center;margin:4px auto 6px}
+.name-av .avatar-img{animation:bob 1.3s ease-in-out infinite}
+
+.stage{position:relative;height:210px;margin:0 0 16px;border-radius:22px;overflow:hidden;border:1px solid var(--border);
+  background:radial-gradient(120% 90% at 50% 115%,var(--accent-soft),transparent 60%),
+             radial-gradient(40% 60% at 15% 0%,rgba(255,107,74,.12),transparent 70%),
+             radial-gradient(40% 60% at 85% 0%,rgba(61,139,255,.14),transparent 70%),
+             linear-gradient(180deg,var(--surface-2),var(--surface))}
+.stage-floor{position:absolute;left:0;right:0;bottom:0;height:46px;background:repeating-linear-gradient(90deg,var(--surface-2) 0 40px,var(--surface) 40px 80px);opacity:.7;border-top:2px solid var(--border)}
+.stage.empty::before{content:"Waiting for players to join…";position:absolute;inset:0;display:grid;place-items:center;color:var(--muted);font-weight:600}
+.av{position:absolute;bottom:30px;width:96px;margin-left:-48px;display:grid;justify-items:center;transition:left 1.8s ease-in-out;z-index:1}
+.av .fig{position:relative;z-index:2;animation:bob 1.3s ease-in-out infinite;transform-origin:bottom center}
+.av.flip .fig .avatar-img.buddy svg{transform:scaleX(-1)}
+.av.walking .fig{animation:waddle .36s ease-in-out infinite}
+.av.walking .foot.fl{animation:step .36s ease-in-out infinite}
+.av.walking .foot.fr{animation:step .36s ease-in-out infinite reverse}
+.av.hop .fig{animation:jump .6s cubic-bezier(.3,1.5,.6,1)}
+.av .shadow{width:46px;height:8px;margin-top:-4px;border-radius:50%;background:rgba(0,0,0,.25);filter:blur(1px)}
+.av .tag{margin-top:4px;max-width:120px;padding:2px 9px;border-radius:999px;background:var(--surface);border:1px solid var(--border);font-size:.74rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.av.me .tag{background:var(--accent);color:var(--accent-ink);border-color:transparent}
+.av.me{cursor:pointer;z-index:3}
+.av.red .tag{box-shadow:inset 0 -3px 0 #ff4d5e}.av.blue .tag{box-shadow:inset 0 -3px 0 #3d8bff}
+.av.red .shadow{background:rgba(255,77,94,.45)}.av.blue .shadow{background:rgba(61,139,255,.45)}
+.av .bubble{position:absolute;top:-30px;left:56%;padding:3px 9px;border-radius:12px 12px 12px 3px;background:#fff;color:#111;font-size:1rem;box-shadow:var(--shadow);opacity:0;transform:scale(.6);pointer-events:none;white-space:nowrap}
+.av .bubble.show{animation:bubble 2s ease forwards}
+.av.new{animation:dropIn .7s cubic-bezier(.3,1.5,.5,1)}
+.av.bye{animation:poof .45s ease forwards}
+@keyframes bob{0%,100%{transform:translateY(0) scale(1,1)}50%{transform:translateY(-4px) scale(1.02,.98)}}
+@keyframes waddle{0%,100%{transform:rotate(-6deg) translateY(0)}50%{transform:rotate(6deg) translateY(-5px)}}
+@keyframes step{50%{transform:translateY(-3px)}}
+@keyframes jump{0%{transform:translateY(0) scale(1.1,.85)}40%{transform:translateY(-34px) scale(.92,1.1)}75%{transform:translateY(0) scale(1.1,.88)}100%{transform:none}}
+@keyframes bubble{0%{opacity:0;transform:scale(.5) translateY(6px)}12%,80%{opacity:1;transform:scale(1)}100%{opacity:0;transform:scale(.9) translateY(-6px)}}
+@keyframes dropIn{0%{transform:translateY(-180px);opacity:0}60%{opacity:1}100%{transform:none}}
+@keyframes poof{to{transform:scale(.2);opacity:0;filter:blur(4px)}}
+.lobby-list li .avatar-img{margin-left:-6px}
+.board-list .avatar-img{margin-right:-2px}
+.pod-av{display:grid;place-items:center;margin-bottom:2px;animation:bob 1.4s ease-in-out infinite}
+.pod-av.winner{animation:jump 1.4s cubic-bezier(.3,1.5,.6,1) infinite}
+@media (max-width:520px){ .stage{height:180px} .av{width:80px;margin-left:-40px} .av .fig .avatar-img{transform:scale(.85)} }

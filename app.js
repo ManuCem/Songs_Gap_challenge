@@ -123,10 +123,10 @@ const SMALL = new Set(('a an the and or but nor so yet to of in on at by for fro
 const FILLER = new Set('oh ooh ohh woah whoa yeah yea ya ah ahh uh hey la na da mmm mm hmm ay ayy eh huh yo'.split(' '));
 
 const PRESETS = {
-  easy:   { density: 20, minLen: 4, focus: 'content', firstLetter: true,  sizeBoxes: true,  desc: 'About 1 in 5 words, longer words only, with first-letter hints.' },
-  medium: { density: 35, minLen: 3, focus: 'any',     firstLetter: false, sizeBoxes: true,  desc: 'About 1 in 3 words. Boxes show the word length.' },
-  hard:   { density: 55, minLen: 2, focus: 'any',     firstLetter: false, sizeBoxes: false, desc: 'More than half the words, short ones too, and no length clues.' },
-  insane: { density: 85, minLen: 1, focus: 'any',     firstLetter: false, sizeBoxes: false, desc: 'Almost every word is gone. Good luck. 🔥' },
+  easy:   { density: 10, minLen: 4, focus: 'content', firstLetter: true,  sizeBoxes: true,  desc: 'About 1 in 10 words, longer words only, with first-letter hints.' },
+  medium: { density: 18, minLen: 3, focus: 'any',     firstLetter: false, sizeBoxes: true,  desc: 'About 1 in 5 words. Boxes show the word length.' },
+  hard:   { density: 30, minLen: 2, focus: 'any',     firstLetter: false, sizeBoxes: false, desc: 'About 1 in 3 words, short ones too, and no length clues.' },
+  insane: { density: 50, minLen: 1, focus: 'any',     firstLetter: false, sizeBoxes: false, desc: 'Half of the words are gone. Good luck. 🔥' },
 };
 const MODE_LABEL = { type: '✍️ Type', choice: '🎯 Choose', listen: '✍️ Type' };
 const PRESET_LABEL = { easy: 'Easy', medium: 'Medium', hard: 'Hard', insane: 'Insane', custom: 'Custom' };
@@ -227,6 +227,7 @@ function showView(v){
   const cover = v === 'setup' ? SETUP.song?.cover : v === 'game' ? G.s?.cover : '';
   setBackdrop(cover);
   if (v === 'play') renderContinue();
+  renderRoomBanner();
   if (v === 'library') renderLibrary();
   if (v === 'stats') renderStats();
   window.scrollTo(0, 0);
@@ -448,7 +449,7 @@ function renderContinue(){
   let title, sub, go;
   if (G.active && !G.done){
     title = G.s.title;
-    sub = `${G.lastChance ? '❤️ Last chance' : 'Try ' + G.tryNo} · ${lockedCount()} / ${G.gaps.length} correct`;
+    sub = `${G.lastChance ? '❤️ Last chance' : 'Try ' + G.tryNo} · ${lockedCount()} / ${unitCount()} correct`;
     go = () => { showView('game'); if (G.phase !== 'playing') showReady(); };
   } else {
     const p = store.get('progress', null);
@@ -524,14 +525,11 @@ function renderSetupControls(){
   $('optParens').checked = !!o.skipParens;
   // "pause after each line" needs timed lyrics + music
   const canPause = !!(SETUP.song?.times && SETUP.music !== 'off');
-  $('oneShotRow').classList.toggle('hidden', SETUP.mode !== 'choice');
-  $('optOneShot').checked = !!SETUP.oneShot;
   $('optPause').disabled = !canPause;
   $('optPause').checked = canPause && SETUP.pauseLines;
   $('pauseNote').textContent = !SETUP.song?.times ? '(needs synced lyrics ⏱)' : SETUP.music === 'off' ? '(needs music)' : '(easier: the song waits for you)';
 }
 $('optPause').onchange = e => { SETUP.pauseLines = e.target.checked; };
-$('optOneShot').onchange = e => { SETUP.oneShot = e.target.checked; };
 $('readLyricsBtn').onclick = () => {
   const song = SETUP.song;
   openModal(
@@ -736,7 +734,10 @@ const G = {
   focus: null, wait: -1, passed: new Set(), cur: -1, badYt: new Set(),
   phase: 'ready', tryNo: 1, tries: [], lastChance: false, rewinds: 0, tryStart: null, heard: false, xpTotal: 0
 };
-const lockedCount = () => G.gaps.filter(g => g.locked).length;
+const head = g => g.primary || g;                         // copies of a chorus word share one "head"
+const units = () => G.gaps.filter(g => !g.primary);       // what we count: each hidden word once
+const unitCount = () => units().length;
+const lockedCount = () => units().filter(g => g.locked).length;
 const filledCount = lockedCount;
 const REWINDS = 3, REWIND_SECONDS = 20;
 
@@ -820,6 +821,15 @@ function pickSpread(eligible, n, rand, parsed){
     }
     if (!progress) break;
   }
+  // Hide each chosen word in EVERY line of its family (all chorus copies, and a repeat in the
+  // same line), linked as one word: answer it once and every copy turns green. Nothing leaks.
+  const famWords = new Map();
+  parsed.forEach(toks => toks?.forEach(t => { if (t.gap){ const f = fam[t.line]; if (!famWords.has(f)) famWords.set(f, new Set()); famWords.get(f).add(norm(t.core)); } }));
+  parsed.forEach((toks, li) => toks?.forEach(t => {
+    if (!t.core) return;
+    const k = norm(t.core);
+    if (famWords.get(fam[li])?.has(k)){ t.gap = true; t.unit = fam[li] + '|' + k; }
+  }));
 }
 
 function startGame(s, restore, mp){
@@ -850,14 +860,17 @@ function startGame(s, restore, mp){
 
   const box = $('lyrics'), solBox = $('solution');
   box.replaceChildren(); solBox.replaceChildren();
+  const firstOfUnit = new Map();
   parsed.forEach((toks, li) => {
     const d = h('div', { class: 'line' }), sd = h('div', { class: 'line' });
     G.lineGaps.push([]);
     if (!toks){ d.className = sd.className = 'line blank'; }
     else toks.forEach(t => {
       if (!t.gap){ d.append(t.raw + ' '); sd.append(t.raw + ' '); return; }
-      const g = { i: G.gaps.length, line: li, answer: t.core, locked: false, hinted: false, xp: false, wrong: null, lockTry: 0 };
-      if (s.mode === 'choice') g.options = makeOptions(t.core, pool, rand);
+      const g = { i: G.gaps.length, line: li, answer: t.core, locked: false, hinted: false, xp: false, wrong: null, lockTry: 0, twins: [] };
+      const p = t.unit && firstOfUnit.get(t.unit);
+      if (p){ g.primary = p; p.twins.push(g); } else if (t.unit) firstOfUnit.set(t.unit, g);
+      if (s.mode === 'choice') g.options = p ? p.options : makeOptions(t.core, pool, rand);
       if (t.pre) sd.append(t.pre);
       g.sol = h('span', { class: 'sol miss', text: t.core });
       sd.append(g.sol, (t.suf || '') + ' ');
@@ -866,10 +879,10 @@ function startGame(s, restore, mp){
       inp.style.width = (Math.max(3, w) + 1.6) + 'ch';
       if (s.opts.firstLetter) inp.placeholder = t.core[0];
       if (s.mode === 'choice'){ inp.readOnly = true; inp.setAttribute('inputmode', 'none'); inp.classList.add('choice'); if (!s.opts.firstLetter) inp.placeholder = '▾'; }
-      g.input = inp;
+      g.input = inp; g.ph = inp.placeholder;
       inp.addEventListener('focus', () => { G.focus = g; if (s.mode === 'choice' && !g.locked) openChoice(g); });
       inp.addEventListener('click', () => { if (s.mode === 'choice' && !g.locked) openChoice(g); });
-      inp.addEventListener('blur', () => { if (g.input.value.trim().length >= g.answer.length) typedMiss(g); setTimeout(() => { if (G.choiceFor === g && document.activeElement !== inp) closeChoice(); }, 150); });
+      inp.addEventListener('blur', () => { if (g.input.value.trim().length >= g.answer.length) commitWrong(g); setTimeout(() => { if (G.choiceFor === g && document.activeElement !== inp) closeChoice(); }, 150); });
       inp.addEventListener('input', () => onGapInput(g));
       inp.addEventListener('keydown', e => onGapKey(e, g));
       d.append(h('span', { class: 'gap' }, t.pre || '', inp, (t.suf || '') + ' '));
@@ -904,13 +917,13 @@ function startGame(s, restore, mp){
   $('modePill').textContent = (s.mode === 'choice' ? '🎯 Choose' : '✍️ Type') + (s.oneShot ? ' · ⚡' : '') + (s.pauseLines ? ' · ⏸' : '');
   $('saveSongBtn').classList.toggle('hidden', s.src === 'practice');
   $('shareBtn').classList.toggle('hidden', s.src === 'practice' || !!mp);
-  ['printBtn', 'transBtn', 'restartBtn'].forEach(id => $(id).classList.toggle('hidden', !!mp));
+  ['printBtn', 'restartBtn'].forEach(id => $(id).classList.toggle('hidden', !!mp));
+  setTransOpen(false);
   $('newBtn').replaceChildren(mp ? '🚪 ' : '♪ ', h('span', { class: 'lbl', text: mp ? 'Leave room' : 'New song' }));
-  if (mp) setTransOpen(false);
   mpGameLayout();
   refreshSaveBtn();
-  $('keysHint').textContent = (s.mode === 'choice' ? 'Click a gap and press 1–4 to choose' : 'Enter/Tab → next gap · ? → hint')
-    + (s.yt ? ' · Alt+2 → play/pause' : '') + ' · Correct words turn green by themselves.';
+  $('keysHint').textContent = (s.mode === 'choice' ? 'Tap a gap and press 1–4 to choose · a wrong pick is final' : 'Tab/Enter → next gap · Shift+Tab → back · a wrong word you leave is final')
+    + ' · ⌨️ Alt+1 play/pause · Alt+2 hint · Alt+3 rewind · Alt+4 end try';
 
   setupPlayer(s.yt);
   showTab('challenge');
@@ -931,7 +944,7 @@ function startGame(s, restore, mp){
 
 // ---------- HUD ----------
 function updateHud(){
-  const total = G.gaps.length, ok = lockedCount();
+  const total = unitCount(), ok = lockedCount();
   const playingPhase = G.phase === 'playing';
   $('progress').textContent = `${ok} / ${total} correct`;
   $('pfill').style.width = (total ? ok / total * 100 : 0) + '%';
@@ -952,6 +965,8 @@ function updateHud(){
   $('npLock').textContent = G.done ? 'Free play: tap the bar or any line' : G.lastChance ? `❤️ ${G.rewinds} rewind${G.rewinds === 1 ? '' : 's'} left` : '🔒 No rewinding during a try';
   $('tabSolution').textContent = G.done ? '👁 Solution' : '🔒 Solution';
   $('lyrics').classList.toggle('frozen', !playingPhase && !G.done);
+  $('transBtn').classList.toggle('hidden', !G.done);           // 🌍 only once the game is over
+  if (!G.done && !$('transPanel').classList.contains('hidden')) setTransOpen(false);
   mpHud();
 }
 function setInputsEnabled(on){
@@ -963,7 +978,7 @@ function setInputsEnabled(on){
 // ---------- anti-cheat: lines unlock when the song reaches them ----------
 // Only with music + synced lyrics. You can see/type up to the next line; later lines
 // are blurred so you can't read ahead (or copy from a chorus you haven't heard yet).
-const locking = () => !!(G.s?.times && (G.s?.yt || G.s?.mpMusic)) && !G.done;
+const locking = () => false;   // (lines used to unlock as the song played; now the whole song stays readable)
 function unlockedUntil(){
   let i = G.reach + 1;
   while (i < G.parsed.length && !G.parsed[i]) i++;   // skip empty lines
@@ -999,7 +1014,7 @@ async function soundAlikes(word){
   return out;
 }
 async function upgradeOptions(){
-  const s = G.s, gaps = G.gaps.filter(g => !g.locked);
+  const s = G.s, gaps = G.gaps.filter(g => !g.locked && !g.primary);
   const answers = [...new Set(gaps.map(g => g.answer.toLowerCase()))].slice(0, 120);
   const queue = [...answers];
   await Promise.all(Array.from({ length: 6 }, async () => { while (queue.length) await soundAlikes(queue.shift()); }));
@@ -1012,13 +1027,13 @@ async function upgradeOptions(){
     const fill = g.options.filter(o => !same(o, g.answer) && !alike.some(a => same(a, o)));
     const opts = [g.answer, ...alike.map(fix), ...fill].slice(0, 4);
     g.options = shuffle(opts, rng(s.seed + '|' + g.i));
-    g.input.style.width = (Math.max(3, ...g.options.map(o => o.length)) + 1.6) + 'ch';
+    for (const x of groupOf(g)){ x.options = g.options; x.input.style.width = (Math.max(3, ...g.options.map(o => o.length)) + 1.6) + 'ch'; }
   });
 }
 
 // ---------- the try loop ----------
 function triesChips(){
-  const total = G.gaps.length;
+  const total = unitCount();
   if (!G.tries.length) return null;
   return h('div', { class: 'tries' }, G.tries.map(t => h('div', { class: 'try' + (t.last ? ' last' : '') },
     h('small', { text: t.last ? '❤️ Last chance' : 'Try ' + t.n }),
@@ -1050,7 +1065,7 @@ function showReady(){
         ? `Try ${G.tryNo}: the song plays from the start. You can pause, but you can’t rewind. Correct words turn green by themselves.`
         : `Try ${G.tryNo}: fill in the gaps. Correct words turn green by themselves. Press “End try” when you’re done.` }),
     locking() && G.tryNo === 1 && !G.tries.length ? h('p', { class: 'hint', text: '🔒 Lines unlock as the song reaches them. Once a line has played, you can always go back to it.' }) : null,
-    G.s.oneShot ? h('p', { class: 'hint', text: '⚡ One shot: a wrong pick is final for this try.' }) : null,
+    h('p', { class: 'hint', text: '✋ A wrong answer is final for this try, so think before you press Enter/Tab.' }),
     triesChips(),
     h('div', { class: 'btns' },
       readyBtn,
@@ -1066,7 +1081,7 @@ function beginTry(){
   G.passed = new Set(); G.wait = -1; G.cur = -1; G.heard = false; G.mpHid = false; G.mpPaused = false;
   G.gaps.forEach(g => {
     g.input.classList.remove('bad');
-    if (g.dead){ g.dead = false; g.wrong = null; g.input.value = ''; g.input.classList.remove('dead'); }   // one-shot gaps get a new chance each try
+    if (g.dead){ g.dead = false; g.wrong = null; g.input.value = ''; g.input.placeholder = g.ph || ''; g.input.classList.remove('dead'); }   // lost words get a new chance each try
   });
   setInputsEnabled(true);
   updateHud();
@@ -1077,7 +1092,7 @@ function beginTry(){
 
 function awardXp(){
   let xp = 0;
-  G.gaps.forEach(g => {
+  units().forEach(g => {
     if (!g.locked || g.xp) return;
     g.xp = true;
     xp += g.hinted ? 2 : g.lockTry === 1 ? 10 : g.lockTry === 2 ? 7 : 5;
@@ -1091,7 +1106,7 @@ function endTry(){
   if (G.mp) return mpEndTry();
   pauseVideo(); closeChoice();
   if (G.wait >= 0){ G.lineEls[G.wait].classList.remove('wait'); G.wait = -1; }
-  const correct = lockedCount(), total = G.gaps.length;
+  const correct = lockedCount(), total = unitCount();
   G.tries.push({ n: G.tryNo, correct, hints: G.hints - (G.tryStart?.hints || 0), last: G.lastChance });
   G.gaps.forEach(g => { if (!g.locked && g.input.value.trim()) flashBad(g); });
   const xp = awardXp();
@@ -1127,7 +1142,7 @@ function finishGame(xpLastTry){
   G.phase = 'done'; G.done = true; G.wait = -1;
   pauseVideo(); closeChoice();
   store.del('progress');
-  const total = G.gaps.length, correct = lockedCount(), perfect = correct === total;
+  const total = unitCount(), correct = lockedCount(), perfect = correct === total;
   let bonus = 0;
   if (perfect && !G.bonus){ G.bonus = true; bonus = (G.tries.length <= 1 ? 50 : 25) + ({ hard: 50, insane: 100 }[G.s.preset] || 0); G.xpTotal += bonus; }
   if (perfect && !matchMedia('(prefers-reduced-motion: reduce)').matches) confetti();
@@ -1156,8 +1171,8 @@ function finishGame(xpLastTry){
 }
 
 function buildDetail(final){
-  const missed = G.gaps.filter(g => !g.locked);
-  const correct = lockedCount(), total = G.gaps.length;
+  const missed = units().filter(g => !g.locked);
+  const correct = lockedCount(), total = unitCount();
   return {
     title: G.s.title.slice(0, 200), artist: (G.s.artist || '').slice(0, 200), songId: G.s.src === 'lrclib' ? G.s.id : '',
     correct, total, pct: Math.round(correct / total * 100), mode: G.s.mode, preset: G.s.preset, hints: G.hints,
@@ -1205,23 +1220,52 @@ async function syncAttempt(final, xp){
 }
 
 // ---------- typing & choosing ----------
+const groupOf = g => [head(g), ...head(g).twins];
 function lockGap(g, silent){
-  g.locked = true;
-  if (!g.lockTry) g.lockTry = G.lastChance ? 9 : G.tryNo;
-  g.input.value = g.answer;
-  g.input.classList.remove('bad');
-  g.input.classList.add('ok');
-  if (!silent){ g.input.classList.remove('pop'); void g.input.offsetWidth; g.input.classList.add('pop'); mpScore('ok', g); }
-  g.input.readOnly = true;
-  g.input.tabIndex = -1;
-  if (G.choiceFor === g) closeChoice();
+  const lt = head(g).lockTry || (G.lastChance ? 9 : G.tryNo);
+  for (const x of groupOf(g)){
+    x.locked = true; x.dead = false; x.lockTry = lt;
+    x.input.value = x.answer;
+    x.input.classList.remove('bad', 'dead');
+    x.input.classList.add('ok');
+    if (!silent){ x.input.classList.remove('pop'); void x.input.offsetWidth; x.input.classList.add('pop'); }
+    x.input.readOnly = true;
+    x.input.tabIndex = -1;
+    if (G.choiceFor === x) closeChoice();
+  }
+  if (!silent) mpScore('ok', g);
+}
+// a wrong answer is final for this try (no editing it): the word (and its chorus copies) is lost
+function markDead(g){
+  for (const x of groupOf(g)){
+    x.dead = true; x.input.readOnly = true; x.input.classList.add('dead');
+    if (x !== g){ x.input.value = ''; x.input.placeholder = '✗'; }
+    if (G.choiceFor === x) closeChoice();
+  }
+  flashBad(g);
+  G.misses = (G.misses || 0) + 1;
+  mpScore('miss', g);
+}
+function commitWrong(g){
+  if (G.phase !== 'playing' || !playable(g) || G.s.mode === 'choice') return;
+  const v = g.input.value.trim();
+  if (!v || same(v, g.answer)) return;
+  markDead(g); afterChange(g);
 }
 function flashBad(g){ g.input.classList.remove('bad'); void g.input.offsetWidth; g.input.classList.add('bad'); }
 const playable = g => !g.locked && !g.dead && !isFuture(g.line);
+function focusGap(x, noScroll){
+  x.input.focus({ preventScroll: true });
+  if (noScroll) return;
+  const r = x.input.getBoundingClientRect();
+  if (r.top < innerHeight * 0.25 || r.bottom > innerHeight * 0.7) x.input.scrollIntoView({ block: 'center', behavior: 'smooth' });
+}
 function focusNext(from, noScroll){
-  for (let i = from + 1; i < G.gaps.length; i++){
-    if (playable(G.gaps[i])){ G.gaps[i].input.focus({ preventScroll: !!noScroll }); return true; }
-  }
+  for (let i = from + 1; i < G.gaps.length; i++) if (playable(G.gaps[i])){ focusGap(G.gaps[i], noScroll); return true; }
+  return false;
+}
+function focusPrev(from){
+  for (let i = from - 1; i >= 0; i--) if (playable(G.gaps[i])){ focusGap(G.gaps[i]); return true; }
   return false;
 }
 function onGapInput(g){
@@ -1234,17 +1278,17 @@ function afterChange(g){
   updateHud();
   queueSave();
   if (G.s.pauseLines && G.wait === g.line && G.lineGaps[g.line].every(x => x.locked)) continueListen();
-  if (!G.mp && G.phase === 'playing' && G.gaps.every(x => x.locked || x.dead) && !G.finishing){
+  if (!G.mp && G.phase === 'playing' && units().every(x => x.locked || x.dead) && !G.finishing){
     G.finishing = true;
     setTimeout(() => { G.finishing = false; endTry(); }, 300);
   }
 }
 function onGapKey(e, g){
-  if (e.key === 'Enter'){
+  if (e.key === 'Enter' || e.key === 'Tab'){
     e.preventDefault();
-    if (G.s.pauseLines && G.wait === g.line){ continueListen(); return; }
-    typedMiss(g);
-    focusNext(g.i);
+    if (e.key === 'Enter' && G.s.pauseLines && G.wait === g.line){ continueListen(); return; }
+    commitWrong(g);                              // leaving a wrong word = final answer
+    e.shiftKey ? focusPrev(g.i) : focusNext(g.i);
     return;
   }
   if (e.key === '?'){ e.preventDefault(); hint(g); return; }
@@ -1275,13 +1319,7 @@ function pickChoice(g, i){
   const o = g.options[i];
   g.input.value = o;
   if (same(o, g.answer)){ lockGap(g); afterChange(g); focusNext(g.i); }
-  else if (G.s.oneShot){
-    // ⚡ one shot: the wrong pick stays, this gap is gone for this try
-    g.dead = true; G.misses = (G.misses || 0) + 1; mpScore('miss', g);
-    flashBad(g); g.input.classList.add('dead');
-    closeChoice(); afterChange(g); focusNext(g.i);
-  }
-  else { (g.wrong ||= new Set()).add(i); G.misses = (G.misses || 0) + 1; mpScore('miss', g); flashBad(g); openChoice(g); afterChange(g); }
+  else { markDead(g); closeChoice(); afterChange(g); focusNext(g.i); }   // wrong pick = final for this try
 }
 window.addEventListener('resize', closeChoice);
 document.addEventListener('mousedown', e => {
@@ -1293,7 +1331,7 @@ function hint(g){
   if (G.phase !== 'playing') return;
   g = g && playable(g) ? g : (G.focus && playable(G.focus) ? G.focus : G.gaps.find(playable));
   if (!g) return;
-  G.hints++; g.hinted = true; mpScore('hint', g);
+  G.hints++; g.hinted = head(g).hinted = true; mpScore('hint', g);
   if (G.s.mode === 'choice'){
     const wrongIdx = g.options.map((o, i) => i).filter(i => !same(g.options[i], g.answer) && !g.wrong?.has(i));
     if (wrongIdx.length) (g.wrong ||= new Set()).add(wrongIdx[0]);
@@ -1345,7 +1383,7 @@ function saveProgress(){
     answers: G.gaps.map(g => g.locked ? '' : g.input.value),
     locked: G.gaps.map(g => g.locked ? (g.lockTry || 1) : 0),
     hinted: G.gaps.map(g => g.hinted ? 1 : 0),
-    filled: lockedCount(), total: G.gaps.length
+    filled: lockedCount(), total: unitCount()
   });
 }
 let saveT = 0;
@@ -1438,7 +1476,7 @@ async function setupPlayer(id){
           G.heard = true;
           if (G.wait >= 0) continueListen(true);
         }
-        if (e.data === 0 && G.phase === 'playing' && G.heard) endTry();    // song finished → try finished
+        if (e.data === 0 && G.phase === 'playing' && G.heard && !(G.mp && MP.role !== 'host')) endTry();    // song finished → try finished (the host decides in multiplayer)
         mpHostPlayState(e.data);
       }
     }
@@ -1497,7 +1535,7 @@ function poll(){
     if (cur > G.reach && G.phase === 'playing'){ G.reach = cur; applyReach(); queueSave(); mpHostReach(); }
     if (cur < 0) return;
     G.lineEls[cur].classList.add('now'); G.solEls[cur].classList.add('now');
-    if ($('followChk').checked && G.wait < 0){
+    if ($('followChk').checked && G.wait < 0 && !document.activeElement?.closest?.('#lyrics')){
       const el = $('solutionPane').classList.contains('hidden') ? G.lineEls[cur] : G.solEls[cur];
       const r = el.getBoundingClientRect();
       if (r.top < innerHeight * 0.25 || r.bottom > innerHeight * 0.7) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -1536,6 +1574,7 @@ function rewind(){
   toast(G.rewinds ? `⟲ ${REWIND_SECONDS} s · ${G.rewinds} rewind${G.rewinds === 1 ? '' : 's'} left` : '⟲ That was your last rewind');
 }
 function togglePlay(){
+  if (mpPlayerToggle()) return;
   if (!playerReady) return;
   if (G.phase === 'ready' || G.phase === 'between') return;
   if (G.wait >= 0){ continueListen(); return; }
@@ -1572,9 +1611,14 @@ window.__lgc = { G, player: () => player };
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape'){ closeModal(); closeChoice(); $('userMenu').classList.add('hidden'); }
   if (view !== 'game') return;
-  if (e.altKey && !e.ctrlKey && (e.key === '1' || e.key === '2')){
+  // Alt+1 play/pause · Alt+2 hint · Alt+3 rewind (when allowed) · Alt+4 end the try
+  const k = e.code?.startsWith('Digit') ? e.code.slice(5) : e.key;
+  if (e.altKey && !e.ctrlKey && ['1', '2', '3', '4'].includes(k)){
     e.preventDefault();
-    (e.key === '1' ? rewind : togglePlay)();
+    if (k === '1') togglePlay();
+    if (k === '2') hint(G.focus);
+    if (k === '3') rewind();
+    if (k === '4' && !$('endTryBtn').classList.contains('hidden')) $('endTryBtn').click();
   }
 });
 
@@ -1587,16 +1631,15 @@ let trSeq = 0, trTimer = 0, trLast = '';
 try { $('trLang').value = localStorage.getItem('lgc:trLang') || 'es'; } catch {}
 function setTransOpen(on){
   $('transPanel').classList.toggle('hidden', !on);
-  $('gameGrid').classList.toggle('with-trans', on);
-  document.body.classList.toggle('trans-open', on);
   $('transBtn').classList.toggle('saved', on);
+  refreshSide();
 }
 $('transBtn').onclick = () => setTransOpen($('transPanel').classList.contains('hidden'));
 $('trClose').onclick = () => setTransOpen(false);
 $('trLang').onchange = () => { try { localStorage.setItem('lgc:trLang', $('trLang').value); } catch {} if (trLast) translateSel(trLast, true); };
 
 document.addEventListener('selectionchange', () => {
-  if (view !== 'game') return;
+  if (view !== 'game' || !G.done) return;
   clearTimeout(trTimer);
   trTimer = setTimeout(() => {
     const sel = window.getSelection();
@@ -1984,7 +2027,6 @@ const MP = {
   playlist: store.get('playlist', [])
 };
 const fmtPts = n => Math.round(n || 0).toLocaleString('en-US');
-const comboMult = c => Math.min(3, 1 + Math.floor(Math.max(0, c - 1) / 3) * 0.5);   // ×1, ×1.5 after 3 in a row, ×2 after 6…
 const myId = () => cloud?.myUid?.() || '';
 const roundsOf = r => r.format === 'playlist' ? Math.min(r.rounds || 1, r.songs.length) : 1;
 const whenCloud = () => cloud ? Promise.resolve(cloud) : cloudP;
@@ -2020,52 +2062,76 @@ function checkSetupSong(){
   return true;
 }
 
-// ---------- 🎡 playlist tray (home screen) ----------
-function savePlaylist(){ store.set('playlist', MP.playlist); renderPlaylist(); }
-function renderPlaylist(){
-  const box = $('playlistTray'), pl = MP.playlist;
-  box.classList.toggle('hidden', !pl.length);
-  if (!pl.length) return;
-  box.replaceChildren(
-    h('div', { class: 'pl-head' }, h('h3', { text: `🎡 Your playlist (${pl.length}/5)` }), h('button', { class: 'link', text: 'Clear', onclick: () => { MP.playlist = []; savePlaylist(); } })),
-    h('div', { class: 'pl-list' }, pl.map((s, i) => h('div', { class: 'pl-item' }, tile(s.title, s.cover),
-      h('div', { class: 'r-info' }, h('div', { class: 'r-title', text: s.title }), h('div', { class: 'r-sub', text: s.artist + (s.yt ? '' : ' · no music') })),
-      h('button', { class: 'tr-x', 'aria-label': 'Remove', text: '✕', onclick: () => { MP.playlist.splice(i, 1); savePlaylist(); } })))),
-    h('button', { class: 'btn primary full', text: pl.length >= 2 ? `🎡 Host a playlist match (${pl.length} songs)` : 'Add at least 2 songs to host a match', disabled: pl.length < 2, onclick: () => openHostModal('playlist') }),
-    h('p', { class: 'hint', style: 'margin:0', text: 'A wheel picks each song at random and only the first try counts. Points add up across songs.' }));
+// ---------- 🎵 choosing the song(s) for a room ----------
+// The host creates the room first; then picks songs with the normal search → setup screen
+// ("✅ Use this song in the room" / "➕ Add to the room’s playlist"). The room stays open.
+function renderPlaylist(){ $('playlistTray').classList.add('hidden'); }
+const segEl = (vals, cur, onPick, fmt = v => v) => h('div', { class: 'seg', style: `grid-template-columns:repeat(${vals.length},1fr)` },
+  vals.map(v => h('button', { class: v === cur ? 'on' : '', text: fmt(v), onclick: () => onPick(v) })));
+function renderRoomBanner(){
+  const inRoomHost = !!(MP.code && MP.role === 'host');
+  const on = inRoomHost && MP.picking && (view === 'play' || view === 'setup');
+  $('roomBanner').classList.toggle('hidden', !on);
+  if (on) $('roomBanner').replaceChildren(
+    h('span', { text: `🎵 Choosing music for room ${MP.code} (${MP.room?.songs?.length || 0} song${MP.room?.songs?.length === 1 ? '' : 's'} so far): search, open a song, then “✅ Use this song in the room”.` }),
+    h('button', { class: 'btn small', text: '← Back to the room', onclick: () => { MP.picking = false; goRoom(); } }));
+  $('hostBtn').classList.toggle('hidden', !!MP.code);
+  $('roomUseBtn').classList.toggle('hidden', !inRoomHost);
+  $('addPlBtn').classList.toggle('hidden', !inRoomHost);
+  $('startBtn').classList.toggle('hidden', inRoomHost && !!MP.picking);
+  if (inRoomHost) $('addPlBtn').textContent = `➕ Add to the room’s 🎡 playlist (${MP.room?.songs?.length || 0}/5)`;
 }
+function pickSongs(){
+  MP.picking = true;
+  showView('play');
+  $('searchInput').focus();
+}
+$('roomUseBtn').onclick = () => { if (checkSetupSong()) setRoomSongs([songFromSetup()], false); };
 $('addPlBtn').onclick = () => {
   if (!checkSetupSong()) return;
-  if (MP.playlist.some(s => s.id === SETUP.song.id)){ toast('This song is already in your playlist.'); return; }
-  if (MP.playlist.length >= 5){ toast('Your playlist is full (5 songs).'); return; }
-  MP.playlist.push(songFromSetup()); savePlaylist();
-  toast(`➕ Added! Your 🎡 playlist has ${MP.playlist.length}/5 songs (see the home screen).`);
+  const cur = MP.room?.songs || [];
+  if (cur.some(x => x.id === SETUP.song.id)){ toast('This song is already in the room.'); return; }
+  if (cur.length >= 5){ toast('The room playlist is full (5 songs).'); return; }
+  setRoomSongs([...cur, songFromSetup()], true);
 };
+async function setRoomSongs(songs, keepPicking){
+  const r = MP.room;
+  const playlist = songs.length > 1;
+  try {
+    await cloud.updateRoom(MP.code, {
+      songs: songs.map(s => ({ ...s, seed: s.seed || newSeed() })), settings: roomSettings(),
+      format: playlist ? 'playlist' : 'tries', rounds: playlist ? Math.min(Math.max(r.rounds || 1, 2), songs.length) : 1,
+      current: 0, played: []
+    });
+  } catch (e){ console.error(e); toast('Could not update the room.'); return; }
+  if (keepPicking){ toast(`➕ Added! The room has ${songs.length} songs. Add more, or go back to the room.`); showView('play'); }
+  else { toast('✅ Song ready in the room!'); MP.picking = false; goRoom(); }
+}
+function removeRoomSong(i){
+  const songs = MP.room.songs.filter((_, k) => k !== i);
+  cloud.updateRoom(MP.code, { songs, format: songs.length > 1 ? 'playlist' : 'tries', rounds: Math.min(MP.room.rounds || 1, Math.max(songs.length, 1)), current: 0, played: [] });
+}
 $('hostBtn').onclick = () => { if (checkSetupSong()) openHostModal('single'); };
+$('createRoomBtn').onclick = () => openHostModal('empty');
 
 // ---------- host: create a room ----------
 function openHostModal(kind){
-  const playlist = kind === 'playlist';
-  const songs = playlist ? MP.playlist.slice() : [songFromSetup()];
-  const st = { tries: 2, rounds: Math.min(3, songs.length), hostPlays: false, teams: false, name: store.get('nick', '') || (cloud?.state.user?.displayName || '').split(' ')[0] || '' };
-  const seg = (vals, cur, set, fmt = v => v) => h('div', { class: 'seg', style: `grid-template-columns:repeat(${vals.length},1fr)` },
-    vals.map(v => h('button', { class: v === cur ? 'on' : '', text: fmt(v), onclick: () => { set(v); render(); } })));
+  const songs = kind === 'single' ? [songFromSetup()] : [];
+  const st = { hostPlays: false, teams: false, musicAll: true, name: store.get('nick', '') || (cloud?.state.user?.displayName || '').split(' ')[0] || '' };
   const render = () => {
     const nameIn = h('input', { class: 'field', placeholder: 'Your name', maxlength: '20', value: st.name });
     nameIn.oninput = () => { st.name = nameIn.value; };
-    const teamsChk = h('input', { type: 'checkbox' }); teamsChk.checked = st.teams; teamsChk.onchange = () => { st.teams = teamsChk.checked; };
+    const chk = (key, label) => { const c = h('input', { type: 'checkbox' }); c.checked = st[key]; c.onchange = () => { st[key] = c.checked; }; return h('label', { class: 'check' }, c, ' ' + label); };
     openModal(
-      h('h2', { text: playlist ? '🎡 Host a playlist match' : '👥 Host a room' }),
-      h('p', { class: 'muted', text: playlist ? songs.map(s => s.title).join(' · ') : `${songs[0].title} · ${songs[0].artist}` }),
+      h('h2', { text: '👥 Create a room' }),
+      h('p', { class: 'muted', text: songs.length ? `${songs[0].title} · ${songs[0].artist}` : 'Friends join first, then you choose the song(s) in the room.' }),
       h('div', { class: 'host-form' },
-        playlist
-          ? [h('b', { text: 'Songs to play' }), seg(songs.map((_, i) => i + 1), st.rounds, v => st.rounds = v), h('small', { class: 'muted', text: 'Only the first try counts for each song.' })]
-          : [h('b', { text: 'Tries' }), seg([1, 2, 3], st.tries, v => st.tries = v, v => `${v} ${v === 1 ? 'try' : 'tries'}`)],
         h('b', { text: 'Your screen' }),
-        seg(['host', 'play'], st.hostPlays ? 'play' : 'host', v => st.hostPlays = v === 'play', v => v === 'host' ? '🖥 Host only' : '🎮 Host & play'),
-        h('small', { class: 'muted', text: st.hostPlays ? 'You play on this screen too, and the live scores show next to the lyrics.' : 'Big screen mode: the song and the live scores, no lyrics (great for a projector).' }),
+        segEl(['host', 'play'], st.hostPlays ? 'play' : 'host', v => { st.hostPlays = v === 'play'; render(); }, v => v === 'host' ? '🖥 Host only' : '🎮 Host & play'),
+        h('small', { class: 'muted', text: st.hostPlays ? 'You play on this screen too, with the live scores next to the lyrics.' : 'Big screen mode: the song and the live scores, no lyrics (great for a projector).' }),
         st.hostPlays ? nameIn : null,
-        h('label', { class: 'check' }, teamsChk, ' 👥 Red vs Blue teams')),
+        chk('musicAll', '🔊 The music also plays on every phone (you control pause)'),
+        chk('teams', '👥 Red vs Blue teams')),
       h('div', { class: 'btns' },
         h('button', { class: 'btn primary', text: 'Create the room →', onclick: create }),
         h('button', { class: 'btn', text: 'Cancel', onclick: () => closeModal() })));
@@ -2078,10 +2144,9 @@ function openHostModal(kind){
       const name = (st.name || 'Host').trim().slice(0, 20) || 'Host';
       if (st.hostPlays) store.set('nick', name);
       const code = await c.createRoom({
-        status: 'lobby', locked: false, banned: [], hostPlays: st.hostPlays, teams: st.teams, hostName: name,
-        format: playlist ? 'playlist' : 'tries', triesTotal: playlist ? 1 : st.tries, rounds: playlist ? st.rounds : 1,
-        settings: roomSettings(), songs: songs.map(s => ({ ...s, seed: newSeed() })),
-        current: 0, played: [], tryNo: 1, reach: -1, hideBoard: false, spinId: 0
+        status: 'lobby', locked: false, banned: [], hostPlays: st.hostPlays, teams: st.teams, musicAll: st.musicAll, hostName: name,
+        format: 'tries', triesTotal: 2, rounds: 1, settings: roomSettings(), songs: songs.map(s => ({ ...s, seed: newSeed() })),
+        current: 0, played: [], tryNo: 1, reach: -1, hideBoard: false, spinId: 0, songPos: 0, songSeq: 0
       });
       if (st.hostPlays) await c.setPlayer(code, freshPlayer(name));
       closeModal();
@@ -2130,7 +2195,7 @@ function askName(cb){
 function leaveSubs(){ MP.unsubRoom?.(); MP.unsubPlayers?.(); MP.unsubRoom = MP.unsubPlayers = null; }
 function enterRoom(code, role, me){
   leaveSubs();
-  Object.assign(MP, { code, role, room: null, players: [], loadedKey: '', loading: '', spinShown: null, modal: null, lobbyBuilt: '', confettiDone: false,
+  Object.assign(MP, { code, role, room: null, players: [], loadedKey: '', loading: '', spinShown: null, modal: null, lobbyBuilt: '', confettiDone: false, picking: false,
     points: me?.points || 0, combo: 0, hints: me?.hints || 0, misses: me?.misses || 0, left: me?.left || 0 });
   store.set('room', { code, role });
   showView('room');
@@ -2156,7 +2221,7 @@ function askLeaveRoom(){
 async function leaveRoom(){
   const code = MP.code, role = MP.role, status = MP.room?.status;
   leaveSubs(); store.del('room'); closeModal(true);
-  Object.assign(MP, { code: null, role: null, room: null, players: [], modal: null });
+  Object.assign(MP, { code: null, role: null, room: null, players: [], modal: null, picking: false });
   if (G.mp){ G.active = false; G.mp = null; destroyPlayer(); }
   showView('play');
   try {
@@ -2184,7 +2249,7 @@ function renderRoomCard(){
     h('button', { class: 'x', title: 'Leave the room', 'aria-label': 'Leave the room', text: '✕', onclick: askLeaveRoom }));
   box.classList.remove('hidden');
 }
-function goRoom(){ const s = MP.room?.status; showView(!s || s === 'lobby' || s === 'spin' || !G.mp ? 'room' : 'game'); if (s === 'lobby') renderLobby(); }
+function goRoom(){ MP.picking = false; const s = MP.room?.status; showView(!s || s === 'lobby' || s === 'spin' || !G.mp ? 'room' : 'game'); if (s === 'lobby') renderLobby(); }
 
 function onRoom(room){
   const prev = MP.room;
@@ -2193,7 +2258,7 @@ function onRoom(room){
   if (MP.role !== 'host' && (room.banned || []).includes(myId())){ endRoom('The host removed you from the room.'); return; }
   if (room.status === 'lobby'){
     if (prev && prev.status !== 'lobby') resetForLobby();
-    if (view !== 'room' && view !== 'library' && view !== 'stats') showView('room');
+    if (view !== 'room' && view !== 'library' && view !== 'stats' && !MP.picking) showView('room');
     renderLobby();
   } else if (room.status === 'spin'){
     if (MP.spinShown !== room.spinId){ MP.spinShown = room.spinId; showView('room'); renderRoomWaiting(); showSpin(room); }
@@ -2201,6 +2266,7 @@ function onRoom(room){
     if (G.mp && G.active) mpFinish(); else renderRoomWaiting();
   } else syncGame(room);
   renderBoard();
+  renderRoomBanner();
   if (view === 'play') renderContinue();
 }
 function onPlayers(list){
@@ -2240,16 +2306,29 @@ function renderLobby(){
           host ? h('button', { class: 'btn small', text: '🔗 Copy the invite link', onclick: () => copyText(joinUrl) }) : null),
         h('div', { class: 'card lobby-main' }, h('div', { id: 'lobbyInfo' }), h('div', { id: 'lobbyPlayers' }), h('div', { id: 'lobbyActions', class: 'btns' }))));
   }
-  // what we're playing
+  // what we're playing (the host chooses it here, and can change it after every game)
   const s = r.settings || {};
-  $('lobbyInfo').replaceChildren(
-    h('div', { class: 'lobby-songs' }, r.songs.map(x => h('div', { class: 'lobby-song' }, tile(x.title, x.cover), h('div', { class: 'r-info' }, h('div', { class: 'r-title', text: x.title }), h('div', { class: 'r-sub', text: x.artist }))))),
-    h('div', { class: 'res-stats', style: 'justify-content:flex-start;margin:10px 0 4px' },
-      h('span', { class: 'pill', text: r.format === 'playlist' ? `🎡 ${roundsOf(r)} of ${r.songs.length} songs · 1 try each` : `🔁 ${r.triesTotal} ${r.triesTotal === 1 ? 'try' : 'tries'}` }),
+  const songs = r.songs || [];
+  $('lobbyInfo').replaceChildren(...[
+    h('h3', { text: songs.length > 1 ? '🎡 Playlist' : '🎵 Song' }),
+    songs.length
+      ? h('div', { class: 'lobby-songs' }, songs.map((x, i) => h('div', { class: 'lobby-song' }, tile(x.title, x.cover),
+          h('div', { class: 'r-info' }, h('div', { class: 'r-title', text: x.title }), h('div', { class: 'r-sub', text: x.artist + (x.yt ? '' : ' · no music') })),
+          host ? h('button', { class: 'tr-x', title: 'Remove this song', 'aria-label': 'Remove ' + x.title, text: '✕', onclick: () => removeRoomSong(i) }) : null)))
+      : h('div', { class: 'lobby-empty', text: host ? 'No song yet. Choose one, or several for a 🎡 playlist match.' : '🎵 The host is choosing the song…' }),
+    host ? h('div', { class: 'row', style: 'flex-wrap:wrap;margin-top:8px' },
+      h('button', { class: 'btn small' + (songs.length ? '' : ' primary'), text: songs.length ? '🔄 Change / add songs' : '🎵 Choose a song', onclick: pickSongs })) : null,
+    host && songs.length === 1 ? h('div', { class: 'lobby-fmt' }, h('b', { text: 'Tries' }),
+      segEl([1, 2, 3], r.triesTotal || 1, v => cloud.updateRoom(MP.code, { triesTotal: v, format: 'tries' }), v => `${v} ${v === 1 ? 'try' : 'tries'}`)) : null,
+    host && songs.length > 1 ? h('div', { class: 'lobby-fmt' }, h('b', { text: 'Songs to play (a wheel picks them · 1 try each)' }),
+      segEl(songs.map((_, i) => i + 1), roundsOf(r), v => cloud.updateRoom(MP.code, { rounds: v }))) : null,
+    songs.length ? h('div', { class: 'res-stats', style: 'justify-content:flex-start;margin:10px 0 4px' },
+      h('span', { class: 'pill', text: r.format === 'playlist' ? `🎡 ${roundsOf(r)} of ${songs.length} songs` : `🔁 ${r.triesTotal} ${r.triesTotal === 1 ? 'try' : 'tries'}` }),
       h('span', { class: 'pill', text: PRESET_LABEL[s.preset] || 'Custom' }),
-      h('span', { class: 'pill', text: (s.mode === 'choice' ? '🎯 Choose' : '✍️ Type') + (s.oneShot ? ' · ⚡ one shot' : '') }),
+      h('span', { class: 'pill', text: s.mode === 'choice' ? '🎯 Choose' : '✍️ Type' }),
+      h('span', { class: 'pill', text: r.musicAll ? '🔊 Music on every phone' : '🖥 Music on the host only' }),
       r.teams ? h('span', { class: 'pill', text: '🔴 vs 🔵 teams' }) : null,
-      r.locked ? h('span', { class: 'pill', text: '🔒 Locked' }) : null));
+      r.locked ? h('span', { class: 'pill', text: '🔒 Locked' }) : null) : null].filter(Boolean));
   // players
   const list = MP.players.slice().sort((a, b) => (a.joinedAt || 0) - (b.joinedAt || 0));
   const me = myId();
@@ -2268,13 +2347,14 @@ function renderLobby(){
       h('button', { class: 'btn small team-btn blue', text: '🔵 Join Blue', onclick: () => cloud.setPlayer(MP.code, { team: 'blue' }) })) : null].filter(Boolean));
   // actions
   $('lobbyActions').replaceChildren(...(host ? [
-    h('button', { class: 'btn primary big', text: '▶ Start the game', disabled: !list.length, onclick: hostStartGame }),
-    h('div', { class: 'row' },
+    h('button', { class: 'btn primary big', text: songs.length ? '▶ Start the game' : '🎵 Choose a song first', disabled: !list.length || !songs.length, onclick: hostStartGame }),
+    h('div', { class: 'row', style: 'flex-wrap:wrap' },
+      h('button', { class: 'btn small', text: r.musicAll ? '🔊 Music: every phone' : '🖥 Music: host only', onclick: () => cloud.updateRoom(MP.code, { musicAll: !r.musicAll }) }),
       h('button', { class: 'btn small', text: r.locked ? '🔓 Unlock room' : '🔒 Lock room', onclick: () => cloud.updateRoom(MP.code, { locked: !r.locked }) }),
       h('button', { class: 'btn small', text: r.teams ? '👤 No teams' : '👥 Teams', onclick: () => cloud.updateRoom(MP.code, { teams: !r.teams }) }),
       h('button', { class: 'btn small', text: '🚪 Close room', onclick: askLeaveRoom }))
   ] : [
-    h('div', { class: 'yt-loading' }, h('span', { class: 'spinner' }), 'Waiting for the host to start…'),
+    h('div', { class: 'yt-loading' }, h('span', { class: 'spinner' }), songs.length ? 'Waiting for the host to start…' : 'Waiting for the host to choose a song…'),
     h('button', { class: 'btn small', text: '🚪 Leave the room', onclick: askLeaveRoom })
   ]));
 }
@@ -2323,6 +2403,7 @@ function showSpin(room){
 // ---------- loading the song & following the host ----------
 async function syncGame(room){
   const song = room.songs[room.current];
+  if (!song) return;
   const key = MP.code + '|' + room.current + '|' + song.seed;
   if (MP.loadedKey !== key){
     if (MP.loading === key) return;
@@ -2333,10 +2414,11 @@ async function syncGame(room){
       const host = MP.role === 'host';
       startGame({
         src: 'lrclib', id: song.id, title: song.title, artist: song.artist, cover: song.cover, duration: song.duration,
-        lines: full.lines, times: full.times, preset: s.preset, mode: s.mode, oneShot: s.oneShot, opts: s.opts,
-        seed: song.seed, yt: host ? song.yt : '', ytAlts: song.alts || [], mpMusic: !!song.yt, pauseLines: false, offset: 0
+        lines: full.lines, times: full.times, preset: s.preset, mode: s.mode, opts: s.opts,
+        // the host always plays the song; players too when "music on every phone" is on
+        seed: song.seed, yt: (host || room.musicAll) ? song.yt : '', ytAlts: song.alts || [], pauseLines: false, offset: 0
       }, null, { role: MP.role, code: MP.code, hostOnly: host && !room.hostPlays });
-      MP.loadedKey = key;
+      MP.loadedKey = key; MP.lastSeq = null; MP.muted = false;
       // joining (or reloading) in the middle of a game: line up with the room's try
       const doneTries = (MP.room.tryNo || 1) - 1 + (MP.room.status === 'between' ? 1 : 0);
       if (doneTries){ G.tries = Array.from({ length: doneTries }, (_, i) => ({ n: i + 1, correct: 0 })); G.tryNo = doneTries + 1; }
@@ -2349,8 +2431,10 @@ async function syncGame(room){
   if (view === 'room') showView('game');
   if (MP.role === 'host') return;                 // the host's own game drives the room
 
-  if ((room.reach ?? -1) > G.reach){
-    G.reach = room.reach; applyReach();
+  // where the host's song is (used by the music on this phone and the line highlight)
+  if (room.songSeq && room.songSeq !== MP.lastSeq){ MP.lastSeq = room.songSeq; MP.seqAt = performance.now(); MP.seqPos = room.songPos || 0; }
+  if (!G.s.yt && (room.reach ?? -1) > G.reach){
+    G.reach = room.reach;
     G.lineEls.forEach((el, i) => el.classList.toggle('now', i === G.reach));
   }
   if ((room.status === 'playing' || room.status === 'paused') && G.phase !== 'playing' && !G.done && G.tries.length < room.tryNo){
@@ -2362,43 +2446,82 @@ async function syncGame(room){
     const paused = MP.room.status === 'paused';
     if (paused !== !!G.mpPaused){ G.mpPaused = paused; setInputsEnabled(!paused); $('mpPaused').classList.toggle('hidden', !paused); }
   }
+  followHostMusic();
   if (room.status === 'between' && G.phase === 'playing' && G.tries.length < room.tryNo) mpEndTry();
+}
+
+// 🔊 players' phones play the same song, kept in sync with the host (pause, position)
+function hostSongPos(){
+  if (!MP.room?.songSeq) return 0;
+  return (MP.seqPos || 0) + (MP.room.status === 'playing' ? (performance.now() - MP.seqAt) / 1000 : 0);
+}
+function followHostMusic(){
+  if (!G.mp || MP.role === 'host' || !G.s?.yt || !playerReady) return;
+  const st = player.getPlayerState?.();
+  if (G.phase !== 'playing' || MP.room?.status !== 'playing' || MP.muted){ if (st === 1) player.pauseVideo(); return; }
+  const want = hostSongPos();
+  if (Math.abs((player.getCurrentTime() || 0) - want) > 1.2) player.seekTo(want, true);
+  if (st !== 1 && st !== 3) player.playVideo();
+}
+function mpFollowTick(){
+  if (!G.mp || MP.role === 'host' || !G.s?.yt) return;
+  const now = performance.now();
+  if (now - (MP.lastFollow || 0) < 2000) return;
+  MP.lastFollow = now;
+  followHostMusic();
+}
+// players: ▶ / Alt+1 only switches the music on this phone (the host controls the game)
+function mpPlayerToggle(){
+  if (!G.mp || MP.role === 'host') return false;
+  if (!G.s.yt){ toast('🎧 The host controls the music.'); return true; }
+  if (playing()){ MP.muted = true; player.pauseVideo(); toast('🔇 Music off on this phone'); }
+  else { MP.muted = false; followHostMusic(); if (MP.room?.status !== 'playing') toast('⏸ The host has paused the song.'); }
+  return true;
 }
 
 function mpShowReady(){
   G.phase = 'ready'; setInputsEnabled(false); updateHud();
   const r = MP.room, host = MP.role === 'host';
   const title = r.format === 'playlist' ? `Song ${(r.played || []).length + 1} of ${roundsOf(r)}` : `Try ${G.tryNo} of ${r.triesTotal}`;
-  let btn;
+  let btn, sound = null;
   if (host){
     btn = h('button', { class: 'btn primary big', text: '▶ Start the song for everyone', onclick: mpHostStartTry });
     if (G.optionsReady && !G.optionsDone){ btn.disabled = true; btn.textContent = '⏳ Preparing…'; G.optionsReady.then(() => { btn.disabled = false; btn.textContent = '▶ Start the song for everyone'; }); }
-  } else btn = h('div', { class: 'yt-loading' }, h('span', { class: 'spinner' }), 'Get ready… the host starts the song');
+  } else {
+    btn = h('div', { class: 'yt-loading' }, h('span', { class: 'spinner' }), 'Get ready… the host starts the song');
+    // phones only play sound after a tap: this unlocks the music on this device
+    if (G.s.yt) sound = h('button', { class: 'btn', text: MP.audioOk ? '✅ Music ready on this phone' : '🔊 Tap to turn on the music on this phone', onclick: e => {
+      try { player?.playVideo(); setTimeout(() => { if (MP.room?.status !== 'playing') player?.pauseVideo(); }, 400); } catch {}
+      MP.audioOk = true; e.currentTarget.textContent = '✅ Music ready on this phone';
+    } });
+  }
   MP.modal = 'ready';
   openModal({ locked: true },
     h('div', { class: 'big-emoji', text: '👥' }), h('h2', { text: title }),
     h('p', { class: 'muted', text: `${G.s.title} · ${G.s.artist}` }),
-    h('p', { class: 'hint', text: G.mp.hostOnly ? 'The song plays on this screen. Players type on their phones, the live scores show here.'
-      : '+100 per word (combos multiply!) · hint −50 · wrong word −30. Lines unlock as the song plays.' }),
-    h('div', { class: 'btns' }, btn),
+    h('p', { class: 'hint', text: G.mp.hostOnly ? 'The song plays on this screen (and on the phones if 🔊 is on). The live scores show here.'
+      : '+1 per word · −1 per wrong answer (and it stays wrong) · a word you solved with a hint gives 0.' }),
+    h('div', { class: 'btns' }, btn, sound),
     h('button', { class: 'link', text: host ? '🚪 Close the room' : '🚪 Leave the room', onclick: askLeaveRoom }));
 }
+const songStamp = () => ({ songPos: playerReady ? (player.getCurrentTime() || 0) : 0, songSeq: Date.now() });
 function mpHostStartTry(){
   MP.modal = null; closeModal(true);
   beginTry();                                      // start the music right away (needs the click)
-  cloud.updateRoom(MP.code, { status: 'playing', tryNo: G.tryNo, hideBoard: false }).catch(console.error);
+  cloud.updateRoom(MP.code, { status: 'playing', tryNo: G.tryNo, hideBoard: false, songPos: 0, songSeq: Date.now() }).catch(console.error);
 }
 function mpHostPlayState(state){
   if (!G.mp || MP.role !== 'host' || G.phase !== 'playing' || !G.heard) return;
   const st = MP.room?.status;
-  if (state === 1 && st === 'paused') cloud.updateRoom(MP.code, { status: 'playing' });
-  if (state === 2 && st === 'playing') cloud.updateRoom(MP.code, { status: 'paused' });
+  if (state === 1 && st === 'paused') cloud.updateRoom(MP.code, { status: 'playing', ...songStamp() });
+  if (state === 2 && st === 'playing') cloud.updateRoom(MP.code, { status: 'paused', ...songStamp() });
 }
-function mpHostReach(){ if (G.mp && MP.role === 'host') cloud.updateRoom(MP.code, { reach: G.reach }).catch(() => {}); }
+function mpHostReach(){ if (G.mp && MP.role === 'host') cloud.updateRoom(MP.code, { reach: G.reach, ...songStamp() }).catch(() => {}); }
 function mpHostClock(t, dur){
-  if (!G.mp || MP.role !== 'host' || G.phase !== 'playing' || G.mpHid || !dur || t < dur - 30 || t < 5) return;
+  mpFollowTick();
+  if (!G.mp || MP.role !== 'host' || G.phase !== 'playing' || G.mpHid || !dur || t < dur - 60 || t < 5) return;
   G.mpHid = true;
-  cloud.updateRoom(MP.code, { hideBoard: true }).catch(() => {});   // 🙈 last 30 seconds: suspense!
+  cloud.updateRoom(MP.code, { hideBoard: true }).catch(() => {});   // 🙈 last minute: suspense!
 }
 
 function mpEndTry(){
@@ -2431,7 +2554,7 @@ function showBetween(){
   openModal({ locked: true },
     h('h2', { text: playlist ? `Song ${songNo} of ${roundsOf(r)} done!` : `Try ${G.tries.length} of ${r.triesTotal} done!` }),
     !G.mp.hostOnly ? h('div', { class: 'res-stats' },
-      h('span', { class: 'pill', text: `✅ ${lockedCount()}/${G.gaps.length} words` }),
+      h('span', { class: 'pill', text: `✅ ${lockedCount()}/${unitCount()} words` }),
       h('span', { class: 'pill', text: `⭐ ${fmtPts(MP.points)} pts` })) : null,
     h('div', { class: 'modal-board' }, boardEl(10)),
     h('div', { class: 'btns' }, actions),
@@ -2478,7 +2601,7 @@ function showPodium(){
     myPlace ? h('p', { class: 'muted', text: `You finished #${myPlace} of ${ranked.length} with ${fmtPts(MP.points)} points.` }) : null,
     h('div', { class: 'btns' },
       h('button', { class: 'btn primary', text: '👁 See the solution', onclick: () => { MP.modal = null; closeModal(); showTab('solution'); } }),
-      host ? h('button', { class: 'btn', text: '🔁 Play again in this room', onclick: rematch }) : null,
+      host ? h('button', { class: 'btn', text: '🔁 Back to the lobby (choose the next song)', onclick: rematch }) : null,
       h('button', { class: 'btn', text: host ? '🚪 Close the room' : '🚪 Leave the room', onclick: leaveRoom })));
   if (myPlace === 1 && !MP.confettiDone && !matchMedia('(prefers-reduced-motion: reduce)').matches){ MP.confettiDone = true; confetti(); }
 }
@@ -2487,11 +2610,12 @@ function rematch(){
   cloud.updateRoom(MP.code, { status: 'lobby', played: [], current: 0, tryNo: 1, reach: -1, hideBoard: false, spinId: 0, songs: r.songs.map(s => ({ ...s, seed: newSeed() })) });
 }
 
-// ---------- live scoreboard ----------
+// ---------- live scoreboard (everyone sees it; hidden in the last minute) ----------
+const boardHidden = () => { const r = MP.room; return !!(r?.hideBoard && (r.status === 'playing' || r.status === 'paused')); };
 function boardEl(limit = 50, big){
   const r = MP.room;
-  if (r?.hideBoard && (r.status === 'playing' || r.status === 'paused'))
-    return h('div', { class: 'board-hidden' }, h('div', { class: 'big-emoji', text: '🙈' }), h('b', { text: 'Scores hidden!' }), h('p', { class: 'muted small', text: 'Last 30 seconds… the results come at the end.' }));
+  if (boardHidden())
+    return h('div', { class: 'board-hidden' }, h('div', { class: 'big-emoji', text: '🙈' }), h('b', { text: 'Scores hidden!' }), h('p', { class: 'muted small', text: 'Last minute of the song… the results come at the end.' }));
   const ranked = rankedPlayers(), me = myId();
   const teams = r?.teams ? teamTotals(ranked) : null;
   return h('div', { class: 'board' + (big ? ' big' : '') },
@@ -2501,61 +2625,70 @@ function boardEl(limit = 50, big){
       r?.teams && p.team ? h('i', { class: 'dot ' + p.team }) : null,
       h('span', { class: 'nm', text: p.name }),
       p.left ? h('span', { class: 'left', title: 'Left the game tab during a try', text: '⚠×' + p.left }) : null,
-      (p.combo || 0) >= 4 ? h('span', { class: 'combo', text: '🔥×' + comboMult(p.combo) }) : null,
-      p.total ? h('span', { class: 'ok', text: `${p.correct || 0}/${p.total}` }) : null,
+      p.total ? h('span', { class: 'ok', text: `✅${p.correct || 0} ❌${p.misses || 0}` }) : null,
       h('b', { text: fmtPts(p.points) }))))
     : h('p', { class: 'muted', text: 'No players yet.' }));
 }
+function renderStrip(){
+  const el = $('mpStrip');
+  if (!G.mp || G.mp.hostOnly || !MP.code){ el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+  if (boardHidden()){ el.replaceChildren(h('span', { text: '🙈 Scores hidden: last minute!' })); return; }
+  el.replaceChildren(...rankedPlayers().slice(0, 10).map((p, i) =>
+    h('span', { class: p.uid === myId() ? 'me' : '', text: `${['🥇', '🥈', '🥉'][i] || (i + 1) + '.'} ${p.name} ${fmtPts(p.points)}` })));
+}
 function renderBoard(){
-  if (G.mp && MP.role === 'host' && MP.code)
+  if (G.mp && MP.code){
     $('mpBoard').replaceChildren(h('div', { class: 'mpb-head' }, h('b', { text: '🏆 Live scores' }), h('span', { class: 'muted small', text: `Room ${MP.code} · ${MP.players.length} players` })), boardEl(40, G.mp.hostOnly));
+    renderStrip(); mpHud();
+  }
   if ($('overlay').classList.contains('hidden')) return;
   if (MP.modal === 'between' && G.phase === 'between') showBetween();
   else if (MP.modal === 'podium') showPodium();
 }
+// right-hand column: live scores (multiplayer) + translator (after the game)
+function refreshSide(){
+  const board = !!(G.mp && MP.code), tr = !$('transPanel').classList.contains('hidden');
+  $('mpBoard').classList.toggle('hidden', !board);
+  $('sideCol').classList.toggle('hidden', !(board || tr));
+  $('gameGrid').classList.toggle('with-side', board || tr);
+}
 function mpGameLayout(){
-  const mp = G.mp, hostView = !!mp && mp.role === 'host';
-  $('view-game').classList.toggle('host-only', !!mp?.hostOnly);
-  $('mpBoard').classList.toggle('hidden', !hostView);
-  $('gameGrid').classList.toggle('with-board', hostView);
+  $('view-game').classList.toggle('host-only', !!G.mp?.hostOnly);
   $('mpPaused').classList.add('hidden');
-  if (hostView) renderBoard();
+  refreshSide();
+  if (G.mp) renderBoard(); else $('mpStrip').classList.add('hidden');
 }
 function mpHud(){
   const mp = G.mp;
   $('ptsPill').classList.toggle('hidden', !mp || mp.hostOnly);
   if (!mp) return;
-  if (!mp.hostOnly) $('ptsPill').textContent = `⭐ ${fmtPts(MP.points)}` + (MP.combo >= 4 ? ` · 🔥×${comboMult(MP.combo)}` : '');
+  if (!mp.hostOnly){
+    const place = rankedPlayers().findIndex(p => p.uid === myId()) + 1;
+    $('ptsPill').textContent = `⭐ ${fmtPts(MP.points)} pts` + (place && !boardHidden() ? ` · #${place}` : '');
+  }
   const host = mp.role === 'host', r = MP.room;
   $('endTryBtn').classList.toggle('hidden', !(host && G.phase === 'playing'));
   $('hintBtn').classList.toggle('hidden', mp.hostOnly || G.phase !== 'playing');
+  if (!host && !G.done) $('npLock').textContent = '🎧 The host controls the song';
   if (r) $('tryPill').textContent = G.done ? '🏁 Finished' : r.format === 'playlist'
     ? `🎡 Song ${(r.played || []).length + 1}/${roundsOf(r)}` : `🔁 Try ${Math.min(G.tryNo, r.triesTotal)}/${r.triesTotal}`;
 }
 
-// ---------- points ----------
+// ---------- points: +1 per word, −1 per wrong answer (a word solved with a hint gives 0) ----------
 function mpScore(kind, g){
   if (!G.mp || G.mp.hostOnly || G.phase !== 'playing') return;
-  let delta;
-  if (kind === 'ok'){
-    if (g?.hinted){ MP.combo = 0; delta = 30; }
-    else { MP.combo++; delta = Math.round([100, 70, 50][Math.min(G.tryNo, 3) - 1] * comboMult(MP.combo)); }
-  } else if (kind === 'hint'){ MP.combo = 0; MP.hints++; delta = -50; }
-  else { MP.combo = 0; MP.misses++; delta = -30; }
-  MP.points = Math.max(0, MP.points + delta);
-  if (g?.input) floatPts(g, delta);
+  let delta = 0;
+  if (kind === 'ok') delta = head(g).hinted ? 0 : 1;
+  else if (kind === 'hint') MP.hints++;
+  else { MP.misses++; delta = -1; }
+  MP.points += delta;
+  if (delta && g?.input) floatPts(g, delta);
   mpHud(); queuePlayerSync();
-}
-// typing mode: a finished wrong word (Enter, or leaving a full-length word) counts as a miss
-function typedMiss(g){
-  if (!G.mp || G.phase !== 'playing' || g.locked || G.s.mode === 'choice') return;
-  const v = g.input.value.trim();
-  if (!v || same(v, g.answer) || v === g.lastMiss) return;
-  g.lastMiss = v; flashBad(g); mpScore('miss', g);
 }
 function floatPts(g, delta){
   const r = g.input.getBoundingClientRect();
-  const el = h('div', { class: 'float-pts ' + (delta >= 0 ? 'up' : 'down'), text: (delta >= 0 ? '+' : '') + delta + (delta > 0 && MP.combo >= 4 ? ` 🔥×${comboMult(MP.combo)}` : '') });
+  const el = h('div', { class: 'float-pts ' + (delta >= 0 ? 'up' : 'down'), text: (delta > 0 ? '+' : '') + delta });
   el.style.left = (r.left + r.width / 2 + scrollX) + 'px';
   el.style.top = (r.top + scrollY - 6) + 'px';
   document.body.append(el);
@@ -2566,7 +2699,7 @@ function mpLeft(){
   MP.left++;
   cloud.setPlayer(MP.code, { left: MP.left }).catch(() => {});
 }
-const playerData = () => ({ points: Math.round(MP.points), correct: G.gaps.length ? lockedCount() : 0, total: G.gaps.length, hints: MP.hints, misses: MP.misses, combo: MP.combo, left: MP.left, tries: G.tries.map(t => t.correct).slice(0, 20) });
+const playerData = () => ({ points: MP.points, correct: G.gaps.length ? lockedCount() : 0, total: unitCount(), hints: MP.hints, misses: MP.misses, combo: MP.combo, left: MP.left, tries: G.tries.map(t => t.correct).slice(0, 20) });
 function queuePlayerSync(){ clearTimeout(MP.syncT); MP.syncT = setTimeout(mpSyncNow, 1200); }
 function mpSyncNow(){
   clearTimeout(MP.syncT);

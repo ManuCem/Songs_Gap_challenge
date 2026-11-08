@@ -567,3 +567,43 @@ body:has(.with-board) .wrap{max-width:1440px}
 .pod.p1 .pod-bar{height:110px}.pod.p2 .pod-bar{height:76px;opacity:.8}.pod.p3 .pod-bar{height:52px;opacity:.65}
 .team-win{font-weight:700;font-size:1.05rem}
 .team-win.red{color:#ff4d5e}.team-win.blue{color:#3d8bff}
+
+/* ================= game layout v2: [player] [lyrics] [side: live scores + translator] ================= */
+.game-grid{display:grid;grid-template-columns:minmax(0,1fr);grid-template-areas:"lyrics";gap:20px;align-items:start}
+.player-col{grid-area:player}
+.lyrics-col{grid-area:lyrics;min-width:0}
+.side{grid-area:side;display:grid;gap:12px;position:sticky;top:78px;max-height:calc(100vh - 170px);overflow:auto;align-content:start}
+.game-grid.with-player{grid-template-columns:minmax(240px,300px) minmax(0,1fr);grid-template-areas:"player lyrics"}
+.game-grid.with-side{grid-template-columns:minmax(0,1fr) 290px;grid-template-areas:"lyrics side"}
+.game-grid.with-player.with-side{grid-template-columns:minmax(230px,280px) minmax(0,1fr) 280px;grid-template-areas:"player lyrics side"}
+body:has(.game-grid.with-side) .wrap{max-width:1440px}
+.side .mp-board,.side .trans{position:static;max-height:none;overflow:visible}
+.mp-strip{display:none}
+@media (max-width:1180px){
+  .game-grid.with-player.with-side{grid-template-columns:minmax(230px,290px) minmax(0,1fr);grid-template-areas:"player lyrics" "side lyrics";grid-template-rows:auto 1fr}
+  .game-grid.with-player.with-side .side{position:static;max-height:none}
+}
+@media (max-width:760px){
+  .game-grid,.game-grid.with-player,.game-grid.with-side,.game-grid.with-player.with-side{grid-template-columns:minmax(0,1fr);grid-template-areas:"player" "lyrics" "side";grid-template-rows:auto}
+  .side{position:static;max-height:none}
+  .side .mp-board{display:none}
+  .side .trans{position:fixed;left:12px;right:12px;bottom:84px;max-height:42vh;overflow:auto;z-index:25;box-shadow:var(--shadow-lg)}
+  .mp-strip:not(.hidden){display:flex;gap:6px;overflow-x:auto;margin-bottom:10px;padding-bottom:2px}
+}
+.mp-strip span{flex:none;padding:5px 10px;border-radius:999px;background:var(--surface-2);font-size:.85rem;font-weight:600;white-space:nowrap}
+.mp-strip span.me{background:var(--accent);color:var(--accent-ink)}
+.host-only .lyrics-col{display:none}
+.host-only .game-grid.with-player.with-side{grid-template-columns:minmax(300px,420px) minmax(0,1fr);grid-template-areas:"player side"}
+.host-only .side{position:static;max-height:none}
+.host-only .side .mp-board{display:block}
+
+/* room banner (choosing a song for the room) */
+.room-banner{max-width:1120px;margin:12px auto 0;padding:10px 16px;border-radius:14px;background:var(--accent);color:var(--accent-ink);display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-weight:600}
+.room-banner span{flex:1;min-width:200px}
+.room-banner .btn{background:var(--accent-ink);color:var(--accent)}
+@media (max-width:1150px){ .room-banner{margin:12px 16px 0} }
+.lobby-song .tr-x{margin-left:auto}
+.lobby-empty{padding:16px;border-radius:14px;border:2px dashed var(--border);text-align:center;color:var(--muted)}
+#createRoomBtn{justify-self:start}
+
+.lobby-fmt{display:grid;gap:6px;margin-top:10px}

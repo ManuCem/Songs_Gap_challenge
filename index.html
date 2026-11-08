@@ -48,6 +48,7 @@
 <main class="wrap">
 
   <!-- ============ PLAY / HOME ============ -->
+  <div class="room-banner hidden" id="roomBanner"></div>
   <section id="view-play" class="view">
     <div id="continueCard" class="continue hidden"></div>
 
@@ -84,7 +85,8 @@
         <input id="joinCode" class="field code-input" placeholder="CODE" maxlength="6" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="Room code">
         <button class="btn primary" id="joinBtn">Join →</button>
       </div>
-      <p class="hint" style="margin:0">Want to host? Pick a song and press “👥 Host a room”, or add songs to a 🎡 playlist.</p>
+      <button class="btn dark" id="createRoomBtn">👥 Create a room (you host)</button>
+      <p class="hint" style="margin:0">The host creates the room first, friends join, then the host picks the song(s). The room stays open for the next game.</p>
     </div>
     <div id="playlistTray" class="card playlist hidden"></div>
   </section>
@@ -120,13 +122,13 @@
           <button data-m="type"><b>✍️ Type</b><span>Write the missing words.</span></button>
           <button data-m="choice"><b>🎯 Choose</b><span>Pick from 4 options.</span></button>
         </div>
-        <label class="check pause-opt hidden" id="oneShotRow"><input id="optOneShot" type="checkbox"> ⚡ One shot: a wrong pick is final <span class="muted small">(options sound alike!)</span></label>
         <label class="check pause-opt"><input id="optPause" type="checkbox"> ⏸ Pause after each line <span class="muted small" id="pauseNote"></span></label>
         <div class="how">
           <b>How it works</b>
           <span>▶ Ready → the song plays once (pause only, no rewinding). Correct words turn green by themselves.</span>
           <span>🔁 When it ends, play it again: your green words stay (Try 2: 40/80…).</span>
           <span>❤️ Last chance: one more play with 3 × ⟲ 20 s rewinds, then your final results.</span>
+          <span>✋ A wrong answer is final for that try. Repeated choruses hide the same word: answer it once.</span>
         </div>
 
         <details class="adv" id="advBox">
@@ -171,8 +173,9 @@
     </div>
     <button class="btn primary big" id="startBtn">Start the challenge →</button>
     <div class="setup-mp">
-      <button class="btn" id="hostBtn">👥 Host a room with this song</button>
-      <button class="btn" id="addPlBtn">➕ Add to 🎡 playlist</button>
+      <button class="btn" id="hostBtn">👥 Play this with friends</button>
+      <button class="btn primary hidden" id="roomUseBtn">✅ Use this song in the room</button>
+      <button class="btn hidden" id="addPlBtn">➕ Add to the room’s 🎡 playlist</button>
     </div>
   </section>
 
@@ -228,6 +231,7 @@
 
       <div class="lyrics-col">
         <div class="mp-paused hidden" id="mpPaused">⏸ The host paused the song</div>
+        <div class="mp-strip hidden" id="mpStrip"></div>
         <div class="tabs" role="tablist">
           <button class="tab on" id="tabChallenge" role="tab" aria-selected="true">✏️ Challenge</button>
           <button class="tab" id="tabSolution" role="tab" aria-selected="false">🔒 Solution</button>
@@ -243,9 +247,10 @@
         </div>
       </div>
 
-      <aside class="mp-board hidden" id="mpBoard" aria-label="Live scores"></aside>
+      <aside class="side hidden" id="sideCol">
+      <div class="mp-board hidden" id="mpBoard" aria-label="Live scores"></div>
 
-      <aside class="trans hidden" id="transPanel" aria-label="Translation">
+      <div class="trans hidden" id="transPanel" aria-label="Translation">
         <div class="tr-head">
           <b>🌍 Translate</b>
           <select id="trLang" class="field" aria-label="Translate to">
@@ -258,6 +263,7 @@
           <button class="tr-x" id="trClose" aria-label="Close translation">✕</button>
         </div>
         <div id="trBody"><p class="hint" style="margin:0">Select any words in the lyrics to translate them. Select one word to also see its meaning and pronunciation.</p></div>
+      </div>
       </aside>
     </div>
   </section>

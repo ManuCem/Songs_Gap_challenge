@@ -218,11 +218,11 @@ function applyTheme(t){
   const dark = t ? t === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
   document.querySelector('meta[name=theme-color]').content = dark ? '#0d0e11' : '#f4f2ee';
 }
-applyTheme(store.get('theme', 'dark'));
+applyTheme(store.get('theme2', 'dark'));      // dark for everyone (new key: older "light" choices start dark again)
 $('themeBtn').onclick = () => {
   const cur = document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
   const next = cur === 'dark' ? 'light' : 'dark';
-  applyTheme(next); store.set('theme', next);
+  applyTheme(next); store.set('theme2', next);
 };
 
 const VIEWS = ['play', 'setup', 'game', 'library', 'stats', 'room'];
@@ -321,7 +321,7 @@ async function fanTest(artist, song){
   const q = artist + ' ' + song;
   $('searchInput').value = q;
   await doSearch(q);
-  document.querySelector('#searchResults .result')?.click();
+  document.querySelector('#searchResults .sr')?.click();
 }
 const savedCovers = store.get('covers2', {});
 async function coverFor(title, artist){
@@ -369,7 +369,7 @@ let searchTimer = 0, searchSeq = 0;
 $('searchInput').addEventListener('input', e => {
   clearTimeout(searchTimer);
   const q = e.target.value.trim();
-  if (q.length < 2){ searchSeq++; $('searchResults').replaceChildren(); $('searchSpin').classList.add('hidden'); return; }
+  if (q.length < 2){ searchSeq++; $('searchResults').replaceChildren(); $('view-play').classList.remove('searching'); $('searchSpin').classList.add('hidden'); return; }
   searchTimer = setTimeout(() => doSearch(q), 450);
 });
 $('searchInput').addEventListener('keydown', e => {
@@ -463,9 +463,11 @@ function lyricsFor(t){
       `${LRCLIB}/search?q=${encodeURIComponent(title + ' ' + prim)}`,
       `${LRCLIB}/search?q=${encodeURIComponent(title + ' ' + t.artist)}`
     ];
+    let failed = false;
     for (const url of tries){
-      try { const r = await fetch(url); if (!r.ok) continue; const best = pickBest(await r.json(), t.duration); if (best) return best; } catch {}
+      try { const r = await fetch(url); if (!r.ok){ failed = true; continue; } const best = pickBest(await r.json(), t.duration); if (best) return best; } catch { failed = true; }
     }
+    if (failed){ t.lyr = null; return undefined; }   // network hiccup / rate limit: don't say "no lyrics", let a click try again
     return null;
   })();
 }
@@ -516,17 +518,17 @@ function lyricsBadge(badge, j){
   badge.className = j.syncedLyrics ? 'badge synced' : 'badge';
   badge.textContent = j.syncedLyrics ? '⏱ SYNCED' : 'LYRICS';
 }
+// results replace the song cards right under the search bar (same card look), so they're always on screen
 function renderResults(list, msg){
   const box = $('searchResults');
+  $('view-play').classList.add('searching');
   if (!list.length){ box.replaceChildren(h('div', { class: 'empty', text: msg || 'No songs found. Try the artist + song name, or paste the lyrics yourself.' })); return; }
   box.replaceChildren(...list.map((t, i) => {
-    const badge = h('span', { class: 'badge', text: '…' });
-    const card = h('button', { class: 'result', style: `animation-delay:${i * 25}ms`, onclick: () => openTrack(t, card, badge) },
-      tile(t.title, t.thumb),
-      h('div', { class: 'r-info' },
-        h('div', { class: 'r-title', text: t.title }),
-        h('div', { class: 'r-sub', text: [t.artist, t.album, t.year].filter(Boolean).join(' · ') })),
-      h('div', { class: 'r-meta' }, t.duration ? h('span', { text: fmtTime(t.duration) }) : null, badge));
+    const badge = h('span', { class: 'badge', text: i < 6 || t.lyr ? '…' : '' });
+    const card = h('button', { class: 'fan-test sr', style: `animation-delay:${i * 25}ms`, onclick: () => openTrack(t, card, badge),
+        title: [t.title, t.artist, t.album, t.year, t.duration ? fmtTime(t.duration) : ''].filter(Boolean).join(' · ') },
+      h('div', { class: 'fan-art' }, tile(t.title, t.thumb)),
+      h('div', { class: 'fan-txt' }, h('b', { text: t.title }), h('span', { text: [t.artist, t.year].filter(Boolean).join(' · ') }), badge));
     // check lyrics for the top results in the background so the badges fill in
     if (i < 6 || t.lyr) lyricsFor(t).then(j => lyricsBadge(badge, j));
     // songs found only in the lyrics database: try to fetch their album art
@@ -537,6 +539,17 @@ function renderResults(list, msg){
     });
     return card;
   }));
+  revealResults();
+}
+// if the first row of results is below the fold (or under the phone keyboard), slide the search bar up under the nav
+function revealResults(){
+  if (view !== 'play') return;
+  const first = $('searchResults').firstElementChild;
+  if (!first) return;
+  const visibleH = window.visualViewport?.height || innerHeight;
+  if (first.getBoundingClientRect().bottom <= visibleH - 12) return;
+  const navH = document.querySelector('.nav')?.getBoundingClientRect().height || 0;
+  scrollTo({ top: scrollY + document.querySelector('.search').getBoundingClientRect().top - navH - 14, behavior: 'smooth' });
 }
 async function openTrack(t, card, badge){
   card.classList.add('loading');
@@ -2038,9 +2051,10 @@ function onCloud(st){
 const cloudP = import('./cloud.js').then(m => { cloud = m; m.onChange(onCloud); return m; });
 cloudP.catch(e => console.warn('Cloud features unavailable:', e));
 
+const gLogo = () => $('loginBtn').querySelector('.g-logo').cloneNode(true);   // the Google "G" from the nav button
 function wall(emoji, title, text){
   return h('div', { class: 'card wall' }, h('div', { class: 'big-emoji', text: emoji }), h('h3', { text: title }), h('p', { text }),
-    h('button', { class: 'btn dark', text: 'Sign in with Google', onclick: doSignIn }));
+    h('button', { class: 'btn g-btn', onclick: doSignIn }, gLogo(), 'Sign in with Google'));
 }
 
 // ---------- library ----------
@@ -2396,10 +2410,10 @@ function askName(cb){
     inp,
     h('div', { class: 'btns' },
       h('button', { class: 'btn primary', text: 'Join the room →', onclick: go }),
-      google ? null : h('button', { class: 'btn', text: '🔑 Use my Google photo instead', onclick: async () => {
+      google ? null : h('button', { class: 'btn g-btn', onclick: async () => {
         await doSignIn();
         if (signedIn()){ if (!store.get('nick', '')) store.set('nick', (cloud.state.user.displayName || '').split(' ')[0]); askName(cb); }
-      } })));
+      } }, gLogo(), 'Use my Google photo instead')));
   setTimeout(() => { inp.focus(); inp.select(); }, 50);
 }
 

@@ -120,14 +120,25 @@ const SMALL = new Set(('a an the and or but nor so yet to of in on at by for fro
   'i me my mine you your yours he him his she her hers it its we us our ours they them their theirs ' +
   'is am are was were be been being do does did have has had will would can could shall should may might must not no ' +
   'im youre hes shes its were theyre ive youve weve theyve ill youll well theyll id youd dont doesnt didnt cant wont isnt arent wasnt').split(' '));
-const FILLER = new Set('oh ooh ohh woah whoa yeah yea ya ah ahh uh hey la na da mmm mm hmm ay ayy eh huh yo'.split(' '));
+// ad-libs nobody can spell: "oh-oh", "ooooh", "la-la-la", "nanana", "yeah-yeah", "uh-huh", "mm-hmm", "skrrt"…
+const FILLER_SYL = /^(o+h*|a+h+|u+h+|e+h+|a+y+e?|e+y+|w+h?o+a+h*|w+h?o{2,}|h+o{2,}|y+e+a+h*|y+e+h+|y+a+h*|y+o+|l+a+|n+a+h*|d+a+|h+a+h*|h+e+y+|m+|h+m+|m+h+m+|h+u+h+|b+r+|g+r+|s+k+r+t*)$/;
+function isFiller(core){
+  const parts = String(core).toLowerCase().normalize('NFD').replace(/[̀-ͯ']/g, '').split(/[-–—~]+/).map(p => p.replace(/[^a-z]/g, '')).filter(Boolean);
+  return parts.length > 0 && parts.every(p => {
+    if (FILLER_SYL.test(p)) return true;
+    const rep = p.match(/^([a-z]{2,4}?)\1+$/);           // one filler sound repeated: "ohoh", "lalala"
+    return !!rep && FILLER_SYL.test(rep[1]);
+  });
+}
 
+// density = % of the song's DIFFERENT words you really type (a chorus sung 4 times counts once)
 const PRESETS = {
   easy:   { density: 10, minLen: 4, focus: 'content', firstLetter: true,  sizeBoxes: true,  desc: 'Casual listener. 1 in 10 words, first letters given. Failing this is a choice. 💀' },
-  medium: { density: 18, minLen: 3, focus: 'any',     firstLetter: false, sizeBoxes: true,  desc: 'You know the chorus… right? 1 in 5 words.' },
-  hard:   { density: 30, minLen: 2, focus: 'any',     firstLetter: false, sizeBoxes: false, desc: 'Day-one fan. 1 in 3 words, no length clues.' },
-  insane: { density: 50, minLen: 1, focus: 'any',     firstLetter: false, sizeBoxes: false, desc: 'You ARE the artist. Half the song is gone. 🔥' },
+  medium: { density: 15, minLen: 3, focus: 'any',     firstLetter: false, sizeBoxes: true,  desc: 'You know the chorus… right? 1 in 7 words.' },
+  hard:   { density: 25, minLen: 2, focus: 'any',     firstLetter: false, sizeBoxes: false, desc: 'Day-one fan. 1 in 4 words, no length clues.' },
+  insane: { density: 40, minLen: 1, focus: 'any',     firstLetter: false, sizeBoxes: false, desc: 'You ARE the artist. 40% of the song is gone. 🔥' },
 };
+const GAPS_V = 2;      // gap-engine version: saved games from another version can't be restored
 const MODE_LABEL = { type: '✍️ Type', choice: '🎯 Choose', listen: '✍️ Type' };
 const PRESET_LABEL = { easy: 'Easy', medium: 'Medium', hard: 'Hard', insane: 'Insane', custom: 'Custom' };
 
@@ -146,8 +157,9 @@ function isEligible(core, inParen, o){
   if (o.focus === 'small') return SMALL.has(w);
   const letters = (core.match(/[\p{L}\p{N}]/gu) || []).length;
   if (letters < o.minLen) return false;
-  if (o.focus === 'content') return !SMALL.has(w) && !FILLER.has(w);
-  return !FILLER.has(w) || o.minLen <= 1;
+  if (isFiller(core)) return false;                              // never hide an "oh-oh" (on any level)
+  if (o.focus === 'content') return !SMALL.has(w);
+  return true;
 }
 
 function parseLines(lines, o, force){
@@ -585,6 +597,7 @@ function renderContinue(){
     go = () => { showView('game'); if (G.phase !== 'playing') showReady(); };
   } else {
     const p = store.get('progress', null);
+    if (p && p.gv !== GAPS_V){ store.del('progress'); box.classList.add('hidden'); return; }   // saved by an older gap engine: its gaps don't match any more
     if (!p || !p.s){ box.classList.add('hidden'); return; }
     title = p.s.title;
     sub = `${p.lastChance ? '❤️ Last chance' : 'Try ' + (p.tryNo || 1)} · ${p.filled || 0} / ${p.total || '?'} correct · ${timeAgo(new Date(p.at))}`;
@@ -881,7 +894,7 @@ function buildPool(parsed){
   parsed.forEach(toks => toks && toks.forEach(t => {
     if (!t.core) return;
     const n = norm(t.core);
-    if (n.length < 2 || seen.has(n) || FILLER.has(n)) return;
+    if (n.length < 2 || seen.has(n) || isFiller(t.core)) return;
     seen.add(n); pool.push(t.core);
   }));
   return pool;
@@ -919,10 +932,11 @@ function lineFamilies(parsed){
   parsed.forEach((toks, li) => {
     if (!toks) return;
     const set = new Set(toks.map(t => t.core ? norm(t.core) : '').filter(Boolean));
-    if (set.size >= 2){
+    if (set.size){
       for (const r of reps){
-        const inter = [...set].filter(w => r.set.has(w)).length;
-        if (inter / new Set([...set, ...r.set]).size >= 0.6){ fam[li] = r.id; return; }
+        const inter = [...set].filter(w => r.set.has(w)).length, union = new Set([...set, ...r.set]).size;
+        // one-word lines ("Baby!") only match the very same word
+        if (set.size >= 2 ? inter / union >= 0.6 : inter === union){ fam[li] = r.id; return; }
       }
     }
     reps.push({ id: reps.length, set });
@@ -931,10 +945,12 @@ function lineFamilies(parsed){
   return fam;
 }
 
-// Spread the gaps evenly: every line gets one gap before any line gets a second,
-// gaps on the same line avoid sitting next to each other, and a word is never
-// hidden twice in repeated lines (see lineFamilies).
-function pickSpread(eligible, n, rand, parsed){
+// The level's % is what you REALLY type: a chorus sung 4 times is one line here (its words
+// count once), so a song full of repeats can't turn "25%" into "fill the chorus once and done".
+// Every different line gets one gap before any gets a second, gaps on the same line avoid
+// sitting next to each other, and a hidden word is linked in every copy of its line
+// (answer it once, all copies turn green; see lineFamilies).
+function pickSpread(eligible, density, rand, parsed){
   const fam = lineFamilies(parsed);
   const famLines = new Map();                   // family → its lines (all copies of a chorus line)
   fam.forEach((f, li) => { if (f < 0) return; if (!famLines.has(f)) famLines.set(f, []); famLines.get(f).push(li); });
@@ -943,35 +959,38 @@ function pickSpread(eligible, n, rand, parsed){
   const gapsIn = new Map();                     // line → visible gaps so far
   const cap = li => Math.max(1, Math.floor(words(li).length / 2));   // a line is never more than half gaps
   const used = new Map();                       // family → words already hidden in it
-  const byLine = new Map();
-  eligible.forEach(t => { if (!byLine.has(t.line)) byLine.set(t.line, []); byLine.get(t.line).push(t); });
-  const lines = [...byLine.values()].map(arr => shuffle(arr, rand));
-  // n = how many VISIBLE gaps this level should show (chorus copies included)
-  let left = n;
+  // the words you can be asked: each different line once (the first time it's sung)
+  const cands = new Map();
+  eligible.forEach(t => {
+    const f = fam[t.line];
+    if (!cands.has(f)) cands.set(f, { line: t.line, toks: [] });
+    if (cands.get(f).line === t.line) cands.get(f).toks.push(t);
+  });
+  const lines = [...cands.entries()].map(([f, c]) => ({ f, toks: shuffle(c.toks, rand) }));
+  const total = lines.reduce((n, l) => n + l.toks.length, 0);
+  let left = Math.max(1, Math.round(total * density / 100));       // words to type (each counts once)
   const fits = (t, f, k) => {
     if (countIn(t.line, k) > 1) return false;                 // "timeless, timeless, timeless": never hide those
-    const cost = famLines.get(f).reduce((c, li) => c + countIn(li, k), 0);
-    if (cost > left + 1) return false;                        // would blow the level's budget
     return famLines.get(f).every(li => (gapsIn.get(li) || 0) + countIn(li, k) <= cap(li));
   };
   while (left > 0){
     let progress = false;
-    for (const arr of shuffle([...lines], rand)){
+    for (const { f, toks } of shuffle([...lines], rand)){
       if (left <= 0) break;
-      const f = fam[arr[0].line];
       if (!used.has(f)) used.set(f, new Set());
       const taken = used.get(f);
-      const free = arr.filter(t => !t.gap && !taken.has(norm(t.core)) && fits(t, f, norm(t.core)));
+      const free = toks.filter(t => !t.gap && !taken.has(norm(t.core)) && fits(t, f, norm(t.core)));
       if (!free.length) continue;
-      const near = arr.filter(t => t.gap).map(t => t.pos);
+      const near = toks.filter(t => t.gap).map(t => t.pos);
       const pick = free.find(t => !near.some(p => Math.abs(p - t.pos) <= 1)) || free[0];
       // hide this word in EVERY copy of the line (linked: answer once, all copies turn green)
       const k = norm(pick.core);
       taken.add(k);
       for (const li of famLines.get(f)) for (const t of words(li)) if (norm(t.core) === k){
         t.gap = true; t.unit = f + '|' + k;
-        gapsIn.set(li, (gapsIn.get(li) || 0) + 1); left--;
+        gapsIn.set(li, (gapsIn.get(li) || 0) + 1);
       }
+      left--;
       progress = true;
     }
     if (!progress) break;
@@ -984,10 +1003,7 @@ function startGame(s, restore, mp){
   if (!eligible.length){ toast('No words to hide with these settings. Try a lower minimum length.'); return false; }
   const rand = rng(s.seed);
   if (s.force) eligible.forEach(t => t.gap = true);
-  else {
-    const n = Math.max(1, Math.round(eligible.length * s.opts.density / 100));
-    pickSpread(eligible, n, rand, parsed);
-  }
+  else pickSpread(eligible, s.opts.density, rand, parsed);
   const pool = s.mode === 'choice' ? buildPool(parsed) : null;
 
   destroyPlayer();
@@ -1068,6 +1084,7 @@ function startGame(s, restore, mp){
   $('saveSongBtn').classList.toggle('hidden', s.src === 'practice');
   $('shareBtn').classList.toggle('hidden', s.src === 'practice' || !!mp);
   ['printBtn', 'restartBtn'].forEach(id => $(id).classList.toggle('hidden', !!mp));
+  ['podiumBtn', 'lobbyBtn'].forEach(id => $(id).classList.add('hidden'));
   setTransOpen(false);
   $('newBtn').replaceChildren(mp ? '🚪 ' : '♪ ', h('span', { class: 'lbl', text: mp ? 'Leave room' : 'New song' }));
   mpGameLayout();
@@ -1533,7 +1550,7 @@ $('tabSolution').onclick = () => showTab('solution');
 function saveProgress(){
   if (!G.active || G.done || G.mp) return;
   store.set('progress', {
-    s: G.s, session: G.session, hints: G.hints, played: G.played, at: Date.now(),
+    gv: GAPS_V, s: G.s, session: G.session, hints: G.hints, played: G.played, at: Date.now(),
     tryNo: G.tryNo, tries: G.tries, lastChance: G.lastChance, reach: G.reach, rewinds: G.rewinds, xpTotal: G.xpTotal,
     answers: G.gaps.map(g => g.locked ? '' : g.input.value),
     locked: G.gaps.map(g => g.locked ? (g.lockTry || 1) : 0),
@@ -1573,6 +1590,9 @@ $('restartBtn').onclick = () => {
   askConfirm('Start a new game?', 'You get new random gaps and your tries for this game are lost.', '↺ New game', restart);
 };
 $('newBtn').onclick = () => G.mp ? askLeaveRoom() : showView('play');
+// after the podium: get back to it, or (host) take everyone back to the lobby for the next song
+$('podiumBtn').onclick = () => { if (MP.room?.status === 'final') showPodium(); else $('podiumBtn').classList.add('hidden'); };
+$('lobbyBtn').onclick = () => { if (MP.role === 'host' && MP.room) rematch(); };
 $('contBtn').onclick = () => continueListen();
 
 // =====================================================================
@@ -2361,7 +2381,7 @@ function openHostModal(kind){
       if (st.hostPlays) store.set('nick', name);
       const code = await c.createRoom({
         status: 'lobby', locked: false, banned: [], hostPlays: st.hostPlays, teams: st.teams, musicAll: st.musicAll, hostName: name, hostPhoto: myPhoto(),
-        format: 'tries', triesTotal: 2, rounds: 1, settings: roomSettings(), songs: songs.map(s => ({ ...s, seed: newSeed() })),
+        format: 'tries', triesTotal: 2, rounds: 1, missPts: 1, settings: roomSettings(), songs: songs.map(s => ({ ...s, seed: newSeed() })),
         current: 0, played: [], tryNo: 1, reach: -1, hideBoard: false, spinId: 0, songPos: 0, songSeq: 0
       });
       if (st.hostPlays) await c.setPlayer(code, freshPlayer(name));
@@ -2459,6 +2479,7 @@ function endRoom(msg){
   const keepView = G.mp && G.done;     // after the podium you can stay on the solution
   leaveSubs(); store.del('room');
   Object.assign(MP, { code: null, role: null, room: null, modal: null });
+  ['podiumBtn', 'lobbyBtn'].forEach(id => $(id).classList.add('hidden'));
   if (keepView){ toast(msg); return; }
   closeModal(true);
   if (G.mp){ G.active = false; G.mp = null; destroyPlayer(); }
@@ -2686,10 +2707,13 @@ function renderLobby(){
       segEl([1, 2, 3], r.triesTotal || 1, v => cloud.updateRoom(MP.code, { triesTotal: v, format: 'tries' }), v => `${v} ${v === 1 ? 'try' : 'tries'}`)) : null,
     host && songs.length > 1 ? h('div', { class: 'lobby-fmt' }, h('b', { text: 'Songs to play (a wheel picks them · 1 try each)' }),
       segEl(songs.map((_, i) => i + 1), roundsOf(r), v => cloud.updateRoom(MP.code, { rounds: v }))) : null,
+    host ? h('div', { class: 'lobby-fmt' }, h('b', { text: '❌ A wrong answer costs (points)' }),
+      segEl(MISS_OPTS, missPts(r), v => cloud.updateRoom(MP.code, { missPts: v }), v => v ? `−${v}` : '0')) : null,
     songs.length ? h('div', { class: 'res-stats', style: 'justify-content:flex-start;margin:10px 0 4px' },
       h('span', { class: 'pill', text: r.format === 'playlist' ? `🎡 ${roundsOf(r)} of ${songs.length} songs` : `🔁 ${r.triesTotal} ${r.triesTotal === 1 ? 'try' : 'tries'}` }),
       h('span', { class: 'pill', text: PRESET_LABEL[s.preset] || 'Custom' }),
       h('span', { class: 'pill', text: s.mode === 'choice' ? '🎯 Choose' : '✍️ Type' }),
+      h('span', { class: 'pill', text: missPts(r) ? `❌ −${missPts(r)} per miss` : '❌ Misses: 0 pts' }),
       h('span', { class: 'pill', text: r.musicAll ? '🔊 Music on every phone' : '🖥 Music on the host only' }),
       r.teams ? h('span', { class: 'pill', text: '🔴 vs 🔵 teams' }) : null,
       r.locked ? h('span', { class: 'pill', text: '🔒 Locked' }) : null) : null].filter(Boolean));
@@ -2866,7 +2890,7 @@ function mpShowReady(){
     h('div', { class: 'big-emoji', text: '👥' }), h('h2', { text: title }),
     h('p', { class: 'muted', text: `${G.s.title} · ${G.s.artist}` }),
     h('p', { class: 'hint', text: G.mp.hostOnly ? 'The song plays on this screen (and on the phones if 🔊 is on). The live scores show here.'
-      : '+1 per word · −1 per wrong answer (and it stays wrong) · a word you solved with a hint gives 0.' }),
+      : `+1 per word · ${missText(r)} (and it stays wrong) · a word you solved with a hint gives 0.` }),
     h('div', { class: 'btns' }, btn, sound),
     h('button', { class: 'link', text: host ? '🚪 Close the room' : '🚪 Leave the room', onclick: askLeaveRoom }));
 }
@@ -3036,6 +3060,9 @@ function mpHud(){
     $('ptsPill').textContent = `⭐ ${fmtPts(MP.points)} pts` + (place && !boardHidden() ? ` · #${place}` : '');
   }
   const host = mp.role === 'host', r = MP.room;
+  const over = !!(G.done && r?.status === 'final');      // after the podium (e.g. looking at the solution)
+  $('podiumBtn').classList.toggle('hidden', !over);
+  $('lobbyBtn').classList.toggle('hidden', !(over && host));
   $('endTryBtn').classList.toggle('hidden', !(host && G.phase === 'playing'));
   $('hintBtn').classList.toggle('hidden', mp.hostOnly || G.phase !== 'playing');
   if (!host && !G.done) $('npLock').textContent = '🎧 The host controls the song';
@@ -3043,13 +3070,16 @@ function mpHud(){
     ? `🎡 Song ${(r.played || []).length + 1}/${roundsOf(r)}` : `🔁 Try ${Math.min(G.tryNo, r.triesTotal)}/${r.triesTotal}`;
 }
 
-// ---------- points: +1 per word, −1 per wrong answer (a word solved with a hint gives 0) ----------
+// ---------- points: +1 per word, −(host's choice) per wrong answer (a word solved with a hint gives 0) ----------
+const MISS_OPTS = [0, 1, 2, 3, 5];
+const missPts = r => MISS_OPTS.includes(r?.missPts) ? r.missPts : 1;
+const missText = r => missPts(r) ? `−${missPts(r)} per wrong answer` : 'wrong answers cost nothing';
 function mpScore(kind, g){
   if (!G.mp || G.mp.hostOnly || G.phase !== 'playing') return;
   let delta = 0;
   if (kind === 'ok') delta = head(g).hinted ? 0 : 1;
   else if (kind === 'hint') MP.hints++;
-  else { MP.misses++; delta = -1; }
+  else { MP.misses++; delta = -missPts(MP.room); }
   MP.points += delta;
   if (delta && g?.input) floatPts(g, delta);
   mpHud(); queuePlayerSync();

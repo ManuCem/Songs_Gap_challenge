@@ -152,8 +152,8 @@
         <details class="adv" id="advBox">
           <summary>Custom settings</summary>
           <div class="adv-grid">
-            <label>Gap density: <b id="densVal">35</b>% of the words
-              <input id="density" type="range" min="10" max="100" value="35"></label>
+            <label>Gap density: <b id="densVal">25</b>% of the words <small class="muted">(a repeated chorus counts once)</small>
+              <input id="density" type="range" min="5" max="50" value="25"></label>
             <label>Minimum word length: <b id="minVal">3</b> letters
               <input id="minLen" type="range" min="1" max="7" value="3"></label>
             <label>Focus on
@@ -316,6 +316,8 @@
     <button class="btn hidden" id="contBtn">▶ <span class="lbl">Continue</span></button>
     <button class="btn" id="hintBtn" title="Hint (press ? inside a gap)">💡 <span class="lbl">Hint</span></button>
     <button class="btn" id="endTryBtn" title="Stop this try and see your score">🏁 <span class="lbl">End try</span></button>
+    <button class="btn primary hidden" id="lobbyBtn" title="Everyone goes back to the lobby (choose the next song)">🔁 <span class="lbl">Back to the lobby</span></button>
+    <button class="btn hidden" id="podiumBtn" title="See the final podium again">🏆 <span class="lbl">Podium</span></button>
     <span class="grow"></span>
     <button class="btn" id="restartBtn" title="New random gaps">↺ <span class="lbl">Restart</span></button>
     <button class="btn" id="newBtn">♪ <span class="lbl">New song</span></button>

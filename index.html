@@ -74,6 +74,11 @@
         </div>
       </div>
       <p class="solo-label">…or play solo</p>
+      <div class="pick-head">
+        <p class="kicker">Host mode</p>
+        <h2>🎵 Pick the song<br>for your lobby</h2>
+        <p class="muted" id="pickTitle"></p>
+      </div>
       <label class="search">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
         <input id="searchInput" type="search" placeholder="Search a song you know…" autocomplete="off" aria-label="Search a song or artist">
@@ -161,6 +166,7 @@
             <label class="check"><input id="optFirst" type="checkbox"> Show the first letter as a hint</label>
             <label class="check"><input id="optSize" type="checkbox"> Size boxes to the word length</label>
             <label class="check"><input id="optParens" type="checkbox"> Don't hide ad-libs in (parentheses)</label>
+            <label class="check"><input id="optClean" type="checkbox" checked> 🧼 Clean lyrics: hide swear words (never used as gaps)</label>
           </div>
         </details>
       </div>

@@ -764,3 +764,23 @@ body:has(.game-grid.with-side) .wrap{max-width:1440px}
 .verdict{display:inline-block;margin:10px auto 0;padding:6px 16px;border-radius:10px;font-family:var(--display);font-weight:700;font-size:1.35rem;letter-spacing:.04em;transform:rotate(-3deg);border:3px solid currentColor;animation:stamp .5s cubic-bezier(.3,1.6,.5,1)}
 .verdict.fake{color:#ff4d5e}.verdict.casual{color:#ff9f43}.verdict.mid{color:var(--muted)}.verdict.real{color:var(--ok)}.verdict.goat{color:var(--accent-text)}
 @keyframes stamp{0%{transform:scale(2.4) rotate(-12deg);opacity:0}100%{transform:scale(1) rotate(-3deg);opacity:1}}
+
+/* 4) the rotating line keeps its space: longer messages don't push the page down */
+.bait-line{height:2.6em;line-height:1.3;overflow:visible}
+@media (max-width:620px){ .bait-line{height:3.9em} }
+/* fan tests: song cover + title + artist */
+.fan-test{grid-template-columns:46px minmax(0,1fr);align-items:center;column-gap:10px}
+.fan-art .tile{width:46px;height:46px;border-radius:10px;font-size:1rem}
+.fan-txt{display:grid;min-width:0}
+.fan-txt b,.fan-txt span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* host "pick a song" screen */
+.pick-head{display:none}
+body.picking .hero h1,body.picking .hero>.kicker,body.picking .lead,body.picking .bait-line,body.picking .vs-card,
+body.picking .solo-label,body.picking .steps3,body.picking .foot,body.picking #continueCard,body.picking #pasteToggle{display:none!important}
+body.picking .pick-head{display:block;margin:8px 0 22px}
+body.picking .pick-head h2{font-size:clamp(2.2rem,8vw,3.8rem);letter-spacing:-.045em;line-height:.95;margin:0 0 10px}
+body.picking .hero{margin-top:24px}
+
+.fan-tests{grid-template-columns:repeat(3,minmax(0,1fr))}
+.fan-more{grid-row:auto;grid-column:1/-1;padding:9px;font-size:.88rem;font-weight:600;color:var(--muted)}
+@media (max-width:620px){ .fan-tests{grid-template-columns:repeat(2,minmax(0,1fr))} }

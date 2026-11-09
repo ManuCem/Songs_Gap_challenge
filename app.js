@@ -134,9 +134,14 @@ const PRESET_LABEL = { easy: 'Easy', medium: 'Medium', hard: 'Hard', insane: 'In
 // split one word token into [prefix punctuation, word, suffix punctuation]
 const TOKEN = /^([^\p{L}\p{N}']*)([\p{L}\p{N}'](?:.*[\p{L}\p{N}'])?)([^\p{L}\p{N}']*)$/u;
 
+const EXPLICIT = /^(n[i1]gg(a|as|az|er|ers)|f+u+c+k\w*|motherf\w*|bitch\w*|shit\w*|bullshit|puss(y|ies)|ass(es|hole|holes)?|dick\w*|cunt\w*|cock\w*|whore\w*|hoes?|slut\w*|fag\w*|retard\w*)$/;
+const isExplicit = core => EXPLICIT.test(norm(core));
+// "fuckin'" → "f****n'": keep the first and last letter, hide the rest
+const maskWord = core => core.replace(/^(\W*\w)(\w*)(\w)(\W*)$/u, (m, a, mid, z, tail) => a + '*'.repeat(Math.max(1, mid.length)) + z + tail);
 function isEligible(core, inParen, o){
   const w = norm(core);
   if (!w) return false;
+  if (o.clean !== false && isExplicit(core)) return false;      // 🧼 clean lyrics
   if (o.skipParens && inParen) return false;
   if (o.focus === 'small') return SMALL.has(w);
   const letters = (core.match(/[\p{L}\p{N}]/gu) || []).length;
@@ -191,9 +196,15 @@ async function findCover(title, artist){
   if (coverCache.has(k)) return coverCache.get(k);
   let url = '';
   try {
-    const r = await fetch(`https://itunes.apple.com/search?entity=song&limit=1&term=${encodeURIComponent(artist + ' ' + title)}`);
-    const j = await r.json();
-    url = (j.results?.[0]?.artworkUrl100 || '').replace('100x100bb', '600x600bb');
+    const r = await fetch(`https://itunes.apple.com/search?entity=song&limit=10&term=${encodeURIComponent(artist + ' ' + title)}`);
+    const list = (await r.json()).results || [];
+    // the real release: same artist + title, not a karaoke/cover/tribute version
+    const nA = norm(String(artist).split(/[,&]/)[0]), nT = norm(String(title).replace(/\s*[([].*$/, ''));
+    const fake = x => /karaoke|tribute|cover|instrumental|made famous|in the style/i.test((x.trackName || '') + ' ' + (x.collectionName || '') + ' ' + (x.artistName || ''));
+    const hit = list.find(x => !fake(x) && norm(x.artistName || '').includes(nA) && norm(x.trackName || '').startsWith(nT.slice(0, 6)))
+      || list.find(x => !fake(x) && norm(x.artistName || '').includes(nA))
+      || list.find(x => !fake(x));
+    url = (hit?.artworkUrl100 || '').replace('100x100bb', '600x600bb');
   } catch {}
   coverCache.set(k, url);
   return url;
@@ -268,9 +279,41 @@ const BAITS = [
   a => `Real ${a} fans don’t need the lyrics. Prove it.`,
   a => `${a} fans when they have to type the words: 🧍`,
   a => `Day-one ${a} fans only. Edit-watchers, go back to TikTok.`,
-  a => `C2 English? ${a} says otherwise.`
+  a => `C2 English? ${a} says otherwise.`,
+  a => `You know the ${a} beat. Do you know the words? 🤨`,
+  a => `Your Spotify Wrapped says ${a}. Your score won’t.`,
+  a => `Name one ${a} lyric. Go on. We’ll wait. ⏳`,
+  a => `Singing ${a} in the shower ≠ knowing ${a} 🚿`,
+  a => `This ${a} test has ended friendships. 💔`,
+  a => `Bro said he’s a ${a} fan and got 12% 💀`,
+  a => `Type what ${a} actually said, not what you thought you heard.`,
+  a => `Your ${a} karaoke era ends today. 🎤`,
+  a => `Mumble along to ${a} all you want. The gaps don’t lie.`,
+  a => `${a} stans, this is your final exam. 📝`,
+  a => `You’ve played ${a} 1,000 times. Show your receipts. 🧾`,
+  a => `Real ${a} fans finish this in one try. 🎯`,
+  a => `${a} in your bio? Prove it. 👀`,
+  a => `The ${a} test your group chat needs. 📲`,
+  a => `Screenshot your ${a} score or it didn’t happen. 📸`,
+  a => `Fake ${a} fans are getting exposed today. 🚨`,
+  a => `Think you know ${a}? The lyrics disagree.`,
+  a => `Your ${a} aura is about to be tested. ✨`,
+  a => `Bet you can’t finish one ${a} verse without a mistake. 😤`,
+  a => `${a} fan or TikTok-edit listener? Find out. 🧐`,
+  a => `No rewinding. No lyric sites. Just you and ${a}. 🎧`,
+  a => `Even day-one ${a} fans sweat on this one. 😰`,
+  a => `${a} on repeat for years and still guessing the words? 😭`,
+  a => `Send this ${a} test to the friend who “knows every word”. 😈`,
+  a => `Lowest ${a} score in the group chat buys food. 🍔`,
+  a => `You hum ${a}. Can you type ${a}? ⌨️`,
+  a => `Certified ${a} fan or certified mumbler? 🫠`,
+  a => `${a} lyrics hit different when you have to spell them. ✍️`,
+  a => `If ${a} heard you sing this, it’s over. 💀`,
+  a => `One song. Zero rewinds. Pure ${a} knowledge. 🔥`
 ];
 const pickOne = arr => arr[Math.floor(Math.random() * arr.length)];
+function deck(items){ let d = []; return () => { if (!d.length) d = shuffle(items.slice()); return d.pop(); }; }
+const nextBaitLine = deck(BAITS);
 const bait = artist => pickOne(BAITS)(fanName(artist));
 
 // one tap → search → open the song straight away
@@ -280,20 +323,38 @@ async function fanTest(artist, song){
   await doSearch(q);
   document.querySelector('#searchResults .result')?.click();
 }
-function renderFanTests(){
+const savedCovers = store.get('covers2', {});
+async function coverFor(title, artist){
+  const k = (artist + '|' + title).toLowerCase();
+  if (k in savedCovers) return savedCovers[k];
+  const url = await findCover(title, artist);
+  if (url){ savedCovers[k] = url; store.set('covers2', savedCovers); }
+  return url;
+}
+const nextFanTest = deck(FAN_TESTS);
+async function renderFanTests(){
   const box = $('quickPicks');
-  const pick = shuffle(FAN_TESTS.slice()).slice(0, 6);
-  box.replaceChildren(...pick.map(([a, t, n]) => h('button', { class: 'fan-test', onclick: () => fanTest(a, t) },
-      h('small', { text: '🧪 Real ' + n + ' fan test' }), h('b', { text: t }), h('span', { text: a }))),
-    h('button', { class: 'fan-more', title: 'More fan tests', 'aria-label': 'More fan tests', text: '🔀', onclick: renderFanTests }));
+  const seen = new Set(), pick = [];
+  while (pick.length < 6){ const f = nextFanTest(); if (!seen.has(f[1])){ seen.add(f[1]); pick.push(f); } }
+  const cards = pick.map(([a, t]) => {
+    const art = h('div', { class: 'fan-art' }, tile(t, savedCovers[(a + '|' + t).toLowerCase()] || ''));
+    const card = h('button', { class: 'fan-test', onclick: () => fanTest(a, t) }, art, h('div', { class: 'fan-txt' }, h('b', { text: t }), h('span', { text: a })));
+    return { card, art, a, t };
+  });
+  box.replaceChildren(...cards.map(c => c.card), h('button', { class: 'fan-more', title: 'More songs', 'aria-label': 'More songs', text: '🔀 More songs', onclick: renderFanTests }));
+  for (const c of cards){                                   // fetch missing covers one by one (gentle on the API)
+    if (c.art.querySelector('img')) continue;
+    const url = await coverFor(c.t, c.a);
+    if (url && c.art.isConnected) c.art.replaceChildren(tile(c.t, url));
+  }
 }
 renderFanTests();
 
 // hero: "Only real ___ fans pass this." rotating every few seconds
-let heroI = Math.floor(Math.random() * FAN_TESTS.length);
+const nextHeroArtist = deck(FAN_TESTS);
 function heroBait(){
-  const [a, t, n] = FAN_TESTS[heroI % FAN_TESTS.length];
-  const txt = pickOne(BAITS)('\u0000');
+  const [a, t, n] = nextHeroArtist();
+  const txt = nextBaitLine()('\u0000');
   const [before, after] = txt.split('\u0000');
   $('heroBait').replaceChildren(before, h('button', { class: 'rot', type: 'button', text: n, title: `Take the ${n} fan test`, onclick: () => fanTest(a, t) }), after);
 }
@@ -301,8 +362,8 @@ heroBait();
 setInterval(() => {
   if (view !== 'play') return;
   $('heroBait').classList.add('out');
-  setTimeout(() => { heroI++; heroBait(); $('heroBait').classList.remove('out'); }, 260);
-}, 2800);
+  setTimeout(() => { heroBait(); $('heroBait').classList.remove('out'); }, 260);
+}, 3200);
 
 let searchTimer = 0, searchSeq = 0;
 $('searchInput').addEventListener('input', e => {
@@ -582,6 +643,7 @@ function renderSetupControls(){
   $('focusSel').value = o.focus;
   $('optFirst').checked = !!o.firstLetter; $('optSize').checked = !!o.sizeBoxes;
   $('optParens').checked = !!o.skipParens;
+  $('optClean').checked = o.clean !== false;
   // "pause after each line" needs timed lyrics + music
   const canPause = !!(SETUP.song?.times && SETUP.music !== 'off');
   $('optPause').disabled = !canPause;
@@ -613,6 +675,7 @@ $('focusSel').onchange = e => customize('focus', e.target.value);
 $('optFirst').onchange = e => customize('firstLetter', e.target.checked);
 $('optSize').onchange = e => customize('sizeBoxes', e.target.checked);
 $('optParens').onchange = e => { SETUP.opts.skipParens = e.target.checked; };
+$('optClean').onchange = e => { SETUP.opts.clean = e.target.checked; };
 $('setupBack').onclick = () => showView('play');
 
 function ytId(url){
@@ -777,7 +840,7 @@ $('startBtn').onclick = () => {
   startGame({
     src: song.src, id: song.id || '', title: song.title, artist: song.artist || '', cover: song.cover || '', duration: song.duration || 0,
     lines: song.lines, times: song.times, preset: SETUP.preset, mode: SETUP.mode,
-    opts: { density: opts.density, minLen: opts.minLen, focus: opts.focus, firstLetter: opts.firstLetter, sizeBoxes: opts.sizeBoxes, skipParens: opts.skipParens, instant: true },
+    opts: { density: opts.density, minLen: opts.minLen, focus: opts.focus, firstLetter: opts.firstLetter, sizeBoxes: opts.sizeBoxes, skipParens: opts.skipParens, clean: opts.clean !== false, instant: true },
     seed: newSeed(), yt, music: yt ? 'audio' : 'off', pauseLines: !!(SETUP.pauseLines && yt && song.times), oneShot: SETUP.mode === 'choice' && SETUP.oneShot, ytAlts: alts, offset: SETUP.offset
   });
 };
@@ -830,7 +893,7 @@ function normalizeSettings(s){
   if (s.ytAlts && !Array.isArray(s.ytAlts)) s.ytAlts = s.ytAlts.audio || [];
   s.music = s.yt ? 'audio' : 'off';
   s.pauseLines = !!(s.pauseLines && s.yt && s.times);
-  s.opts = { ...s.opts, instant: true };
+  s.opts = { ...s.opts, instant: true, clean: s.opts?.clean !== false };
   s.oneShot = !!(s.oneShot && s.mode === 'choice');
   return s;
 }
@@ -936,7 +999,10 @@ function startGame(s, restore, mp){
     G.lineGaps.push([]);
     if (!toks){ d.className = sd.className = 'line blank'; }
     else toks.forEach(t => {
-      if (!t.gap){ d.append(t.raw + ' '); sd.append(t.raw + ' '); return; }
+      if (!t.gap){
+        const shown = s.opts.clean !== false && t.core && isExplicit(t.core) ? (t.pre || '') + maskWord(t.core) + (t.suf || '') : t.raw;
+        d.append(shown + ' '); sd.append(shown + ' '); return;
+      }
       const g = { i: G.gaps.length, line: li, answer: t.core, locked: false, hinted: false, xp: false, wrong: null, lockTry: 0, twins: [] };
       const p = t.unit && firstOfUnit.get(t.unit);
       if (p){ g.primary = p; p.twins.push(g); } else if (t.unit) firstOfUnit.set(t.unit, g);
@@ -2183,7 +2249,7 @@ function roomSettings(){
   const mode = SETUP.opts ? SETUP.mode : (prefs.mode === 'choice' ? 'choice' : 'type');
   const o = SETUP.opts || { ...PRESETS.medium, skipParens: true, ...(prefs.opts || {}), ...(PRESETS[preset] || {}) };
   return { preset, mode, oneShot: mode === 'choice' && !!(SETUP.opts ? SETUP.oneShot : prefs.oneShot),
-    opts: { density: o.density, minLen: o.minLen, focus: o.focus, firstLetter: !!o.firstLetter, sizeBoxes: !!o.sizeBoxes, skipParens: !!o.skipParens, instant: true } };
+    opts: { density: o.density, minLen: o.minLen, focus: o.focus, firstLetter: !!o.firstLetter, sizeBoxes: !!o.sizeBoxes, skipParens: !!o.skipParens, clean: o.clean !== false, instant: true } };
 }
 function songFromSetup(){
   const s = SETUP.song;
@@ -2206,6 +2272,8 @@ function renderRoomBanner(){
   const inRoomHost = !!(MP.code && MP.role === 'host');
   const on = inRoomHost && MP.picking && (view === 'play' || view === 'setup');
   $('roomBanner').classList.toggle('hidden', !on);
+  document.body.classList.toggle('picking', inRoomHost && !!MP.picking);
+  $('pickTitle').textContent = `Room ${MP.code || ''} · ${MP.room?.songs?.length || 0}/5 songs chosen`;
   if (on) $('roomBanner').replaceChildren(
     h('span', { text: `🎵 Choosing music for room ${MP.code} (${MP.room?.songs?.length || 0} song${MP.room?.songs?.length === 1 ? '' : 's'} so far): search, open a song, then “✅ Use this song in the room”.` }),
     h('button', { class: 'btn small', text: '← Back to the room', onclick: () => { MP.picking = false; goRoom(); } }));

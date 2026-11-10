@@ -812,3 +812,14 @@ body.picking .hero{margin-top:24px}
 .np-sk:hover{background:rgba(255,255,255,.18)}
 .np-sk:disabled{opacity:.3;cursor:not-allowed}
 .np-prog.scrub{cursor:pointer;height:6px;touch-action:none}
+
+/* ⏸ unfinished games (stats) */
+.unf-card{margin-bottom:12px}
+.unf-card h3{margin:0 0 8px}
+.unf-list{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+.unf{display:flex;align-items:center;gap:12px;padding:8px 6px;border-bottom:1px solid var(--border)}
+.unf:last-child{border-bottom:0}
+.unf .tile{width:44px;height:44px;font-size:1rem}
+.unf .c-info{display:grid;flex:1;min-width:0}
+.unf .c-info b,.unf .c-info small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.g-meta .btn.small{padding:3px 10px;font-size:.75rem}

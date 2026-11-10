@@ -167,7 +167,7 @@ function parseLines(lines, o, force){
   lines.forEach((ln, li) => {
     if (!ln.trim()){ parsed.push(null); return; }
     let inParen = false;
-    const want = force ? new Set(force[li] || []) : null;
+    const want = force ? new Set((force[li] || []).map(norm)) : null;
     parsed.push(ln.trim().split(/\s+/).map((raw, pos) => {
       if (raw.includes('(')) inParen = true;
       const wasParen = inParen;
@@ -590,21 +590,11 @@ $('pasteGo').onclick = () => {
 function renderContinue(){
   if (MP.code){ renderRoomCard(); return; }
   const box = $('continueCard');
-  let title, sub, go;
-  if (G.active && !G.done){
-    title = G.s.title;
-    sub = `${G.lastChance ? '❤️ Last chance' : 'Try ' + G.tryNo} · ${lockedCount()} / ${unitCount()} correct`;
-    go = () => { showView('game'); if (G.phase !== 'playing') showReady(); };
-  } else {
-    const p = store.get('progress', null);
-    if (p && p.gv !== GAPS_V){ store.del('progress'); box.classList.add('hidden'); return; }   // saved by an older gap engine: its gaps don't match any more
-    if (!p || !p.s){ box.classList.add('hidden'); return; }
-    title = p.s.title;
-    sub = `${p.lastChance ? '❤️ Last chance' : 'Try ' + (p.tryNo || 1)} · ${p.filled || 0} / ${p.total || '?'} correct · ${timeAgo(new Date(p.at))}`;
-    go = () => startGame(p.s, p);
-  }
+  const lr = localResume();
+  if (!lr){ box.classList.add('hidden'); return; }
+  const { title, sub, go } = lr;
   box.replaceChildren(
-    tile(title, G.active ? G.s.cover : store.get('progress', {}).s?.cover),
+    tile(title, lr.cover),
     h('div', { class: 'c-info' }, h('small', { text: 'Continue where you left off' }), h('b', { text: title }), h('small', { text: sub })),
     h('button', { class: 'btn primary', text: 'Continue →', onclick: go }),
     h('button', { class: 'x', title: 'Dismiss', 'aria-label': 'Dismiss', text: '✕', onclick: () => { store.del('progress'); if (G.active){ G.active = false; destroyPlayer(); } box.classList.add('hidden'); } }));
@@ -620,6 +610,7 @@ const SETUP = { song: null, preset: 'medium', mode: 'type', opts: null, offset: 
 function openSetup(song, extra = {}){
   const prefs = store.get('prefs', {});
   SETUP.song = song;
+  SETUP.recover = extra.recover || null;
   SETUP.offset = extra.offset || 0;
   SETUP.preset = prefs.preset || 'medium';
   SETUP.mode = prefs.mode === 'choice' ? 'choice' : 'type';
@@ -863,13 +854,53 @@ $('startBtn').onclick = () => {
   store.set('prefs', { preset: SETUP.preset, mode: SETUP.mode, opts: SETUP.opts, music: SETUP.music, pauseLines: SETUP.pauseLines, oneShot: SETUP.oneShot });
   const { opts } = SETUP;
   const alts = Array.isArray(SETUP.cands) ? rankedCands('audio').slice(0, 4).map(c => c.id) : null;
-  startGame({
+  const s = {
     src: song.src, id: song.id || '', title: song.title, artist: song.artist || '', cover: song.cover || '', duration: song.duration || 0,
     lines: song.lines, times: song.times, preset: SETUP.preset, mode: SETUP.mode,
     opts: { density: opts.density, minLen: opts.minLen, focus: opts.focus, firstLetter: opts.firstLetter, sizeBoxes: opts.sizeBoxes, skipParens: opts.skipParens, clean: opts.clean !== false, instant: true },
     seed: newSeed(), yt, music: yt ? 'audio' : 'off', pauseLines: !!(SETUP.pauseLines && yt && song.times), oneShot: SETUP.mode === 'choice' && SETUP.oneShot, ytAlts: alts, offset: SETUP.offset
-  });
+  };
+  const rec = SETUP.recover; SETUP.recover = null;          // ♻️ recovering an unfinished game from your history
+  startGame(rec ? { ...s, ...rec.s } : s, rec?.restore);
 };
+
+// ♻️ Rebuild an unfinished game from your history: same song + level + tries, the words you
+// still had missing are the gaps, the ones you'd already solved count as done.
+const recoverable = r => r.finished === false && !r.multi && r.songId && r.missedPairs?.length;
+async function recoverGame(r){
+  toast(`♻️ Loading “${r.title}”…`);
+  let song;
+  try { song = await fetchSong(r.songId); } catch { toast('Could not load the lyrics of this song. Try again later.'); return; }
+  const key = s => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const force = song.lines.map(() => []);
+  let found = 0;
+  for (const p of r.missedPairs){
+    const w = norm(p.w), l = key(p.l);
+    const li = song.lines.findIndex((ln, i) => ln && key(ln).startsWith(l) && !force[i].some(x => norm(x) === w)
+      && ln.split(/\s+/).some(t => norm(t) === w));
+    if (li >= 0){ force[li].push(p.w); found++; }
+  }
+  if (!found){ toast('Could not match the saved words with the lyrics, sorry.'); return; }
+  const preset = PRESETS[r.preset] ? r.preset : 'medium';
+  const tries = (r.scores || []).map((c, i) => ({ n: i + 1, correct: c, hints: 0, last: false }));
+  openSetup(song, { recover: {
+    s: { force, preDone: r.correct || 0, preset: r.preset || preset, mode: r.mode === 'choice' ? 'choice' : 'type',
+      opts: { ...PRESETS[preset], skipParens: false, clean: true, instant: true } },
+    restore: { session: r.id, hints: r.hints || 0, played: true, tryNo: tries.length + 1, tries, xpTotal: 0 }
+  } });
+  $('setupBait').textContent = `♻️ Recovering your game: ${r.correct || 0} words already done, ${found} still to find · next is try ${tries.length + 1}. Choose the music and press start.`;
+}
+// the game saved on this device ("continue where you left off"), if any
+function localResume(){
+  if (G.active && !G.done && !G.mp)
+    return { title: G.s.title, cover: G.s.cover, session: G.session, sub: `Try ${G.tryNo} · ${lockedCount()} / ${unitCount()} correct`, go: () => { showView('game'); if (G.phase !== 'playing') showReady(); } };
+  const p = store.get('progress', null);
+  if (!p?.s) return null;
+  const same = p.gv === GAPS_V || p.s.force;
+  if (!same && !p.force){ store.del('progress'); return null; }          // very old save: its gaps can't be rebuilt
+  return { title: p.s.title, cover: p.s.cover, session: p.session, sub: `Try ${p.tryNo || 1} · ${p.filled || 0} / ${p.total || '?'} correct · ${timeAgo(new Date(p.at))}`,
+    go: () => startGame(same ? p.s : { ...p.s, force: p.force }, p) };
+}
 
 // =====================================================================
 // game: Ready → Try 1, 2, 3… → ❤️ Last chance → final results
@@ -884,8 +915,9 @@ const G = {
 };
 const head = g => g.primary || g;                         // copies of a chorus word share one "head"
 const units = () => G.gaps.filter(g => !g.primary);       // what we count: each hidden word once
-const unitCount = () => units().length;
-const lockedCount = () => units().filter(g => g.locked).length;
+// preDone: words already solved in a recovered game (they aren't shown as gaps any more)
+const unitCount = () => units().length + (G.s?.preDone || 0);
+const lockedCount = () => units().filter(g => g.locked).length + (G.s?.preDone || 0);
 const filledCount = lockedCount;
 const REWINDS = 3, REWIND_SECONDS = 20;
 
@@ -1548,7 +1580,9 @@ $('tabSolution').onclick = () => showTab('solution');
 function saveProgress(){
   if (!G.active || G.done || G.mp) return;
   store.set('progress', {
-    gv: GAPS_V, s: G.s, session: G.session, hints: G.hints, played: G.played, at: Date.now(),
+    gv: GAPS_V, s: G.s, session: G.session,
+    hints: G.hints, played: G.played, at: Date.now(),
+    force: G.s.force ? undefined : G.lineGaps.map(gs => gs.map(g => g.answer)),   // the gap words themselves: restorable by any future version
     tryNo: G.tryNo, tries: G.tries, lastChance: G.lastChance, reach: G.reach, rewinds: G.rewinds, xpTotal: G.xpTotal,
     answers: G.gaps.map(g => g.locked ? '' : g.input.value),
     locked: G.gaps.map(g => g.locked ? (g.lockTry || 1) : 0),
@@ -1565,7 +1599,8 @@ document.addEventListener('visibilitychange', () => { if (document.hidden){ save
 function restart(){
   if (!G.s) return;
   store.del('progress');
-  startGame({ ...G.s, seed: newSeed() });
+  const { force, preDone, ...s } = G.s;           // a recovered game restarts as a normal new game
+  startGame({ ...s, seed: newSeed() });
 }
 $('hintBtn').onclick = () => hint(G.focus);
 // In-app "are you sure?" window. (The browser's own confirm() pop-up can get silently
@@ -2168,11 +2203,28 @@ async function playFromLibrary(it){
 }
 
 // ---------- stats ----------
+// ⏸ Unfinished games: the one saved on this device + the unfinished ones in your history
+function unfinishedCard(results){
+  const lr = localResume();
+  const cloudOnes = results.filter(r => recoverable(r) && r.id !== lr?.session).slice(0, 10);
+  if (!lr && !cloudOnes.length) return null;
+  const row = (title, cover, sub, btnText, go) => h('li', { class: 'unf' }, tile(title, cover),
+    h('div', { class: 'c-info' }, h('b', { text: title }), h('small', { class: 'muted', text: sub })),
+    h('button', { class: 'btn small primary', text: btnText, onclick: go }));
+  return h('div', { class: 'card unf-card' },
+    h('h3', { text: '⏸ Unfinished games' }),
+    h('ul', { class: 'unf-list' },
+      lr ? row(lr.title, lr.cover, 'On this device · ' + lr.sub, '▶ Continue', lr.go) : null,
+      cloudOnes.map(r => row(r.title + (r.artist ? ' · ' + r.artist : ''), '',
+        `${PRESET_LABEL[r.preset] || 'Custom'} · ${r.tries} ${r.tries === 1 ? 'try' : 'tries'} · ${r.correct}/${r.total} correct · ${timeAgo(toDate(r.updatedAt))}`,
+        '♻️ Recover', () => recoverGame(r)))));
+}
 function renderStats(){
   const body = $('statsBody');
-  if (!signedIn()){ body.replaceChildren(wall('📈', 'Track your progress', 'Sign in to earn XP, keep a daily streak, see your accuracy over time and practise the words you miss most.')); return; }
+  if (!signedIn()){ body.replaceChildren(...[unfinishedCard([]), wall('📈', 'Track your progress', 'Sign in to earn XP, keep a daily streak, see your accuracy over time and practise the words you miss most.')].filter(Boolean)); return; }
   const p = cloud.state.profile || { xp: 0 };
   const results = cloud.state.results;
+  const unf = unfinishedCard(results);
   const xp = p.xp || 0, lvl = levelOf(xp);
   const lo = xpForLevel(lvl), hi = xpForLevel(lvl + 1);
   const avg = results.length ? Math.round(results.reduce((a, r) => a + (r.pct || 0), 0) / results.length) : 0;
@@ -2186,7 +2238,8 @@ function renderStats(){
   results.forEach(r => (r.missed || []).forEach(w => { const k = w.toLowerCase(); counts.set(k, (counts.get(k) || 0) + 1); }));
   const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 24);
 
-  body.replaceChildren(
+  body.replaceChildren(...[
+    unf,
     h('div', { class: 'card level' },
       h('div', { class: 'lvl-badge' }, h('small', { text: 'LEVEL' }), String(lvl)),
       h('div', { class: 'grow' },
@@ -2213,7 +2266,7 @@ function renderStats(){
           askConfirm('Clear your whole history?', 'All your games are deleted from your stats. Your XP, level, streak and library stay.', '🗑 Delete all games',
             () => cloud.clearResults().then(() => toast('History cleared')).catch(e => { console.error(e); toast('Could not clear the history.'); })) }) : null),
       results.length ? h('ul', { class: 'games' }, results.slice(0, 20).map(gameRow))
-      : h('p', { class: 'muted', text: 'Nothing yet. Your games appear here after your first try.' })));
+      : h('p', { class: 'muted', text: 'Nothing yet. Your games appear here after your first try.' }))].filter(Boolean));
 }
 // one row per game: song, level, score after each try, hints, last chance
 function gameRow(r){
@@ -2238,6 +2291,7 @@ function gameRow(r){
       h('span', { class: 'badge', text: `${r.tries || 1} ${(r.tries || 1) === 1 ? 'TRY' : 'TRIES'}` }),
       h('span', { class: 'badge', text: `💡 ${r.hints || 0}` }),
       r.tries && r.finished === false ? h('span', { class: 'badge', text: 'UNFINISHED' }) : null,
+      recoverable(r) ? h('button', { class: 'btn small', text: '♻️ Recover', onclick: () => recoverGame(r) }) : null,
       h('span', { class: 'd', text: timeAgo(toDate(r.updatedAt)) })));
 }
 const kpi = (v, l) => h('div', { class: 'card kpi' }, h('div', { class: 'v', text: v }), h('div', { class: 'l', text: l }));

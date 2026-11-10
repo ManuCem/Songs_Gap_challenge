@@ -1157,8 +1157,8 @@ function updateHud(){
   $('rewBtn').classList.toggle('hidden', !canSeek);
   $('npRew').classList.add('hidden');
   $('rewBtn').textContent = '⟲ 5s'; $('rewBtn').disabled = false;
-  $('npSkip').classList.toggle('hidden', !(G.s?.yt && freeSeek()));
-  $('npSkip').querySelectorAll('button').forEach(b => { b.disabled = !canSeek; });
+  ['npSkipBack', 'npSkipFwd'].forEach(id => $(id).classList.toggle('hidden', !(G.s?.yt && freeSeek())));
+  document.querySelectorAll('.np-sk').forEach(b => { b.disabled = !canSeek; });
   $('lineBtn').classList.toggle('hidden', !(G.done && G.s.times));
   $('npProg').classList.toggle('scrub', canSeek);
   $('npLock').textContent = G.done ? 'Free play: tap the bar or any line' : G.mp ? '🔒 No skipping in multiplayer' : canSeek ? 'Skip or drag the bar to move' : '';
@@ -1804,9 +1804,17 @@ $('lineBtn').onclick = replayLine;
   $('npProg').addEventListener('pointerup', e => { if (!drag) return; drag = false; seekAbs(at(e)); });
   $('npProg').addEventListener('pointercancel', () => { drag = false; });
 }
-// skip buttons: −30 −15 −10 −5 · +5 +10 +15 +30
-$('npSkip').replaceChildren(...[-30, -15, -10, -5, 5, 10, 15, 30].map(d =>
-  h('button', { class: 'np-sk', title: (d < 0 ? 'Back ' : 'Forward ') + Math.abs(d) + ' seconds', text: (d < 0 ? '−' : '+') + Math.abs(d), onclick: () => seekBy(d) })));
+// skip buttons, music-player style: ⟲10 ⟲5 ▶ 5⟳ 10⟳ (a circular arrow with the seconds inside)
+function skipIcon(d){
+  const back = d < 0;
+  return `<svg viewBox="0 0 24 24" aria-hidden="true">`
+    + `<path d="${back ? 'M12 5a8 8 0 1 1-7.4 5' : 'M12 5a8 8 0 1 0 7.4 5'}" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>`
+    + `<path d="${back ? 'M12 1.6 7.9 5 12 8.4z' : 'M12 1.6 16.1 5 12 8.4z'}" fill="currentColor"/>`
+    + `<text x="12" y="16.4" text-anchor="middle" font-size="7.6" font-weight="700" fill="currentColor" font-family="Inter,system-ui,sans-serif">${Math.abs(d)}</text></svg>`;
+}
+const skipBtn = d => { const b = h('button', { class: 'np-sk', title: (d < 0 ? 'Back ' : 'Forward ') + Math.abs(d) + ' seconds', 'aria-label': (d < 0 ? 'Back ' : 'Forward ') + Math.abs(d) + ' seconds', onclick: () => seekBy(d) }); b.innerHTML = skipIcon(d); return b; };
+$('npSkipBack').replaceChildren(skipBtn(-10), skipBtn(-5));
+$('npSkipFwd').replaceChildren(skipBtn(5), skipBtn(10));
 function setOffset(v){
   G.s.offset = Math.round(v * 10) / 10;
   $('offVal').textContent = G.s.offset.toFixed(1) + 's';
@@ -1829,6 +1837,15 @@ window.__lgc = { G, player: () => player };
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape'){ closeModal(); closeChoice(); $('userMenu').classList.add('hidden'); }
   if (view !== 'game') return;
+  // Ctrl+Home → first gap you still have to fill · Ctrl+End → the last one you can fill right now
+  if (e.ctrlKey && (e.key === 'Home' || e.key === 'End') && !$('challengePane').classList.contains('hidden') && $('overlay').classList.contains('hidden') && G.gaps.length){
+    e.preventDefault();
+    const list = e.key === 'Home' ? G.gaps : [...G.gaps].reverse();
+    const g = list.find(g => playable(g)) || list.find(g => !g.locked) || list[0];
+    g.input.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    if (!g.input.disabled) g.input.focus({ preventScroll: true });
+    return;
+  }
   // Alt+1 play/pause · Alt+2 hint · Alt+3 rewind (when allowed) · Alt+4 end the try
   const k = e.code?.startsWith('Digit') ? e.code.slice(5) : e.key;
   if (e.altKey && !e.ctrlKey && ['1', '2', '3', '4'].includes(k)){

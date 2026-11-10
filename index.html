@@ -227,15 +227,18 @@
       <aside class="player-col hidden" id="playerCol">
         <div class="np">
           <div class="np-art"><div class="player" id="playerHost"></div></div>
-          <div class="np-meta"><b id="npTitle"></b><span id="npArtist"></span></div>
+          <div class="np-head">
+            <div class="np-meta"><b id="npTitle"></b><span id="npArtist"></span></div>
+            <button class="np-side" id="npHeart" title="Save to your library" aria-label="Save to your library">♡</button>
+          </div>
           <div class="np-prog" id="npProg"><div class="np-fill" id="npFill"></div></div>
           <div class="np-times"><span id="npCur">0:00</span><span class="np-lock" id="npLock"></span><span id="npDur">0:00</span></div>
           <div class="np-ctrl">
             <button class="np-side hidden" id="npRew" title="Rewind">⟲20</button>
+            <div class="np-skip back hidden" id="npSkipBack"></div>
             <button class="np-play" id="npPlay" aria-label="Play or pause">▶</button>
-            <button class="np-side" id="npHeart" title="Save to your library" aria-label="Save to your library">♡</button>
+            <div class="np-skip fwd hidden" id="npSkipFwd"></div>
           </div>
-          <div class="np-skip hidden" id="npSkip"></div>
         </div>
         <div class="card sync hidden" id="syncBox">
           <div class="sync-row">

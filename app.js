@@ -1849,12 +1849,12 @@ document.addEventListener('keydown', e => {
     return;
   }
   // music shortcuts, they work while you type in a gap:
-  // Alt+1 play/pause · Alt+2 back 5 s · Alt+3 back 10 s · Alt+4 forward 5 s · Alt+5 forward 10 s
+  // same order as the player buttons: Alt+1 −10 s · Alt+2 −5 s · Alt+3 play/pause · Alt+4 +5 s · Alt+5 +10 s
   const k = e.code?.startsWith('Digit') ? e.code.slice(5) : e.key;
-  const SKIP = { 2: -5, 3: -10, 4: 5, 5: 10 };
-  if (e.altKey && !e.ctrlKey && (k === '1' || SKIP[k])){
+  const SKIP = { 1: -10, 2: -5, 4: 5, 5: 10 };
+  if (e.altKey && !e.ctrlKey && (k === '3' || SKIP[k])){
     e.preventDefault();
-    if (k === '1'){ togglePlay(); return; }
+    if (k === '3'){ togglePlay(); return; }
     if (!freeSeek()){ toast('🔒 No skipping in multiplayer'); return; }
     if (G.phase === 'playing' || G.done) seekBy(SKIP[k]);
   }
@@ -1871,9 +1871,8 @@ function renderKeysLegend(){
   const row = (keys, what, title) => h('span', { class: 'kl-row', title }, h('kbd', { text: keys }), what);
   el.replaceChildren(
     h('span', { text: '⌨️', title: 'Keyboard shortcuts (they work while you type)' }),
-    row('Alt+1', '⏯', 'Play / pause'),
-    ...(seek ? [row('Alt+2', '−5s', 'Back 5 seconds'), row('Alt+3', '−10s', 'Back 10 seconds'), row('Alt+4', '+5s', 'Forward 5 seconds'), row('Alt+5', '+10s', 'Forward 10 seconds')]
-             : [h('span', { class: 'kl-row', text: '🔒 no skipping' })]),
+    ...(seek ? [row('Alt+1', '−10s', 'Back 10 seconds'), row('Alt+2', '−5s', 'Back 5 seconds'), row('Alt+3', '⏯', 'Play / pause'), row('Alt+4', '+5s', 'Forward 5 seconds'), row('Alt+5', '+10s', 'Forward 10 seconds')]
+             : [row('Alt+3', '⏯', 'Play / pause'), h('span', { class: 'kl-row', text: '🔒 no skipping' })]),
     h('button', { class: 'kl-x', title: 'Hide the shortcuts', 'aria-label': 'Hide the shortcuts', text: '✕', onclick: () => { store.set('keysHidden', true); renderKeysLegend(); } }));
 }
 
@@ -2959,7 +2958,7 @@ function mpFollowTick(){
   MP.lastFollow = now;
   followHostMusic();
 }
-// players: ▶ / Alt+1 only switches the music on this phone (the host controls the game)
+// players: ▶ / Alt+3 only switches the music on this phone (the host controls the game)
 function mpPlayerToggle(){
   if (!G.mp || MP.role === 'host') return false;
   if (!G.s.yt){ toast('🎧 The host controls the music.'); return true; }

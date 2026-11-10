@@ -805,3 +805,10 @@ body.picking .hero{margin-top:24px}
 .g-btn:hover{background:#f6f7f8}
 .g-logo{width:18px;height:18px;flex:none;display:block}
 .btn.small .g-logo{width:16px;height:16px}
+
+/* solo: skip back/forward buttons on the player card */
+.np-skip{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:4px}
+.np-sk{height:30px;border-radius:9px;background:rgba(255,255,255,.08);color:#fff;font-size:.74rem;font-weight:700;font-variant-numeric:tabular-nums;padding:0}
+.np-sk:hover{background:rgba(255,255,255,.18)}
+.np-sk:disabled{opacity:.3;cursor:not-allowed}
+.np-prog.scrub{cursor:pointer;height:6px;touch-action:none}

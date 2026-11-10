@@ -312,7 +312,7 @@ const BAITS = [
   a => `Your ${a} aura is about to be tested. ✨`,
   a => `Bet you can’t finish one ${a} verse without a mistake. 😤`,
   a => `${a} fan or TikTok-edit listener? Find out. 🧐`,
-  a => `No rewinding. No lyric sites. Just you and ${a}. 🎧`,
+  a => `No lyric sites. No excuses. Just you and ${a}. 🎧`,
   a => `Even day-one ${a} fans sweat on this one. 😰`,
   a => `${a} on repeat for years and still guessing the words? 😭`,
   a => `Send this ${a} test to the friend who “knows every word”. 😈`,
@@ -321,7 +321,7 @@ const BAITS = [
   a => `Certified ${a} fan or certified mumbler? 🫠`,
   a => `${a} lyrics hit different when you have to spell them. ✍️`,
   a => `If ${a} heard you sing this, it’s over. 💀`,
-  a => `One song. Zero rewinds. Pure ${a} knowledge. 🔥`
+  a => `One song. Zero lyric sites. Pure ${a} knowledge. 🔥`
 ];
 const pickOne = arr => arr[Math.floor(Math.random() * arr.length)];
 function deck(items){ let d = []; return () => { if (!d.length) d = shuffle(items.slice()); return d.pop(); }; }
@@ -1015,7 +1015,7 @@ function startGame(s, restore, mp){
     active: true, done: false, bonus: false, played: !!restore?.played,
     focus: null, wait: -1, passed: new Set(), cur: -1, badYt: new Set(),
     phase: 'ready', tryNo: restore?.tryNo || 1, tries: restore?.tries || [],
-    lastChance: !!restore?.lastChance, rewinds: restore?.lastChance ? (restore.rewinds ?? REWINDS) : 0,
+    lastChance: false, rewinds: 0,
     tryStart: null, heard: false, xpTotal: restore?.xpTotal || 0, pendingStart: false, finishing: false,
     mp: mp || null, mpFinished: false, mpHid: false
   });
@@ -1116,20 +1116,20 @@ function updateHud(){
   $('progress').textContent = `${ok} / ${total} correct`;
   $('pfill').style.width = (total ? ok / total * 100 : 0) + '%';
   $('hintVal').textContent = G.hints;
-  $('tryPill').textContent = G.done ? '🏁 Finished' : G.lastChance ? '❤️ Last chance' : `🔁 Try ${G.tryNo}`;
+  $('tryPill').textContent = G.done ? '🏁 Finished' : `🔁 Try ${G.tryNo}`;
   $('hintBtn').classList.toggle('hidden', !playingPhase);
   $('endTryBtn').classList.toggle('hidden', !playingPhase);
   $('contBtn').classList.toggle('hidden', !(playingPhase && G.wait >= 0));
-  // rewind: 3 × 20 s in the last chance, free after the game
-  const canRew = G.done || (playingPhase && G.lastChance);
-  $('rewBtn').classList.toggle('hidden', !canRew);
-  $('npRew').classList.toggle('hidden', !canRew);
-  $('rewBtn').textContent = G.done ? '⟲ 5s' : `⟲ ${REWIND_SECONDS}s (${G.rewinds})`;
-  $('npRew').replaceChildren(G.done ? '⟲5' : `⟲${REWIND_SECONDS}`, G.done ? '' : h('small', { text: '×' + G.rewinds }));
-  $('rewBtn').disabled = $('npRew').disabled = !G.done && G.rewinds <= 0;
+  // solo: skip/scrub any time · multiplayer: locked until the game is over
+  const canSeek = freeSeek() && (playingPhase || G.done);
+  $('rewBtn').classList.toggle('hidden', !canSeek);
+  $('npRew').classList.add('hidden');
+  $('rewBtn').textContent = '⟲ 5s'; $('rewBtn').disabled = false;
+  $('npSkip').classList.toggle('hidden', !(G.s?.yt && freeSeek()));
+  $('npSkip').querySelectorAll('button').forEach(b => { b.disabled = !canSeek; });
   $('lineBtn').classList.toggle('hidden', !(G.done && G.s.times));
-  $('npProg').classList.toggle('scrub', G.done);
-  $('npLock').textContent = G.done ? 'Free play: tap the bar or any line' : G.lastChance ? `❤️ ${G.rewinds} rewind${G.rewinds === 1 ? '' : 's'} left` : '🔒 No rewinding during a try';
+  $('npProg').classList.toggle('scrub', canSeek);
+  $('npLock').textContent = G.done ? 'Free play: tap the bar or any line' : G.mp ? '🔒 No skipping in multiplayer' : canSeek ? 'Skip or drag the bar to move' : '';
   $('tabSolution').textContent = G.done ? '👁 Solution' : '🔒 Solution';
   $('lyrics').classList.toggle('frozen', !playingPhase && !G.done);
   $('transBtn').classList.toggle('hidden', !G.done);           // 🌍 only once the game is over
@@ -1216,7 +1216,7 @@ function showReady(){
   G.phase = 'ready';
   setInputsEnabled(false);
   updateHud();
-  const music = !!G.s.yt, last = G.lastChance;
+  const music = !!G.s.yt, last = false;
   const go = () => { closeModal(true); beginTry(); };
   const readyBtn = h('button', { class: 'btn primary big', text: '▶ Ready', onclick: go });
   if (G.optionsReady && !G.optionsDone){
@@ -1230,14 +1230,13 @@ function showReady(){
     h('p', { class: 'muted', text: last
       ? `The song starts again. This time you can rewind ${REWIND_SECONDS} seconds ${REWINDS} times. After it, you’ll see your final results.`
       : music
-        ? `Try ${G.tryNo}: the song plays from the start. You can pause, but you can’t rewind. Correct words turn green by themselves.`
+        ? `Try ${G.tryNo}: the song plays from the start. Pause, skip back or forward (−30 … +30 s) or drag the bar whenever you want. Correct words turn green by themselves.`
         : `Try ${G.tryNo}: fill in the gaps. Correct words turn green by themselves. Press “End try” when you’re done.` }),
     locking() && G.tryNo === 1 && !G.tries.length ? h('p', { class: 'hint', text: '🔒 Lines unlock as the song reaches them. Once a line has played, you can always go back to it.' }) : null,
     h('p', { class: 'hint', text: '✋ A wrong answer is final for this try, so think before you press Enter/Tab.' }),
     triesChips(),
     h('div', { class: 'btns' },
       readyBtn,
-      G.tries.length && !last ? h('button', { class: 'btn', text: `❤️ Last chance instead (${REWINDS} × ⟲ ${REWIND_SECONDS} s)`, onclick: () => { G.lastChance = true; G.rewinds = REWINDS; go(); } }) : null,
       G.tries.length ? h('button', { class: 'btn', text: '🏁 Finish & see the results', onclick: () => { closeModal(true); finishGame(0); } }) : null),
     h('button', { class: 'link', text: '♪ Choose another song', onclick: () => { closeModal(true); showView('play'); } }));
 }
@@ -1299,7 +1298,6 @@ function endTry(){
     h('p', { class: 'save-note', id: 'saveNote' }),
     h('div', { class: 'btns' },
       h('button', { class: 'btn primary', text: `🔁 Play it again · Try ${G.tryNo}`, onclick: go }),
-      h('button', { class: 'btn', text: `❤️ Last chance · ${REWINDS} × ⟲ ${REWIND_SECONDS} s, then final results`, onclick: () => { G.lastChance = true; G.rewinds = REWINDS; go(); } }),
       h('button', { class: 'btn', text: '🏁 Finish & see the results', onclick: () => { closeModal(true); finishGame(0); } })),
     h('button', { class: 'link', text: '♪ Choose another song', onclick: () => { closeModal(true); showView('play'); } }));
   syncAttempt(false, xp);
@@ -1735,19 +1733,19 @@ function seekLine(li){
   playVideo();
 }
 function replayLine(){ if (G.done) seekLine(Math.max(0, G.cur)); }
-function rewind(){
-  if (!playerReady) return;
-  const t = player.getCurrentTime();
-  if (G.done){ seekTo(t - 5); return; }
-  if (G.phase !== 'playing' || !G.lastChance || G.rewinds <= 0) return;
-  G.rewinds--;
-  const to = Math.max(0, t - REWIND_SECONDS);
+// solo: skip back/forward and scrub whenever you want · multiplayer: only after the game
+const freeSeek = () => !G.mp || G.done;
+function seekBy(d){ if (playerReady) seekAbs((player.getCurrentTime() || 0) + d); }
+function seekAbs(t){
+  if (!playerReady || !freeSeek()) return;
+  const to = Math.max(0, Math.min(t, (player.getDuration() || t) - 0.5));
   seekTo(to);
   if (G.s.times) [...G.passed].forEach(L => { if (lineTime(L) >= to - 0.5) G.passed.delete(L); });
   if (G.wait >= 0){ G.lineEls[G.wait].classList.remove('wait'); G.wait = -1; }
-  playVideo(); updateHud(); queueSave();
-  toast(G.rewinds ? `⟲ ${REWIND_SECONDS} s · ${G.rewinds} rewind${G.rewinds === 1 ? '' : 's'} left` : '⟲ That was your last rewind');
+  if (G.phase === 'playing' || G.done) playVideo();
+  updateHud(); queueSave();
 }
+function rewind(){ seekBy(-5); }
 function togglePlay(){
   if (mpPlayerToggle()) return;
   if (!playerReady) return;
@@ -1758,12 +1756,22 @@ function togglePlay(){
 $('rewBtn').onclick = $('npRew').onclick = rewind;
 $('playBtn').onclick = $('npPlay').onclick = togglePlay;
 $('lineBtn').onclick = replayLine;
-$('npProg').addEventListener('click', e => {
-  if (!G.done || !playerReady) return;
-  const r = $('npProg').getBoundingClientRect();
-  seekTo((e.clientX - r.left) / r.width * (player.getDuration() || 0));
-  playVideo();
-});
+// tap or drag the progress bar to move through the song
+{
+  let drag = false;
+  const at = e => { const r = $('npProg').getBoundingClientRect(); return Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * (player.getDuration() || 0); };
+  const preview = e => { const d = player.getDuration() || 0; if (d) $('npFill').style.width = (at(e) / d * 100) + '%'; };
+  $('npProg').addEventListener('pointerdown', e => {
+    if (!playerReady || !freeSeek() || G.phase === 'ready' || G.phase === 'between') return;
+    drag = true; $('npProg').setPointerCapture(e.pointerId); preview(e);
+  });
+  $('npProg').addEventListener('pointermove', e => { if (drag) preview(e); });
+  $('npProg').addEventListener('pointerup', e => { if (!drag) return; drag = false; seekAbs(at(e)); });
+  $('npProg').addEventListener('pointercancel', () => { drag = false; });
+}
+// skip buttons: −30 −15 −10 −5 · +5 +10 +15 +30
+$('npSkip').replaceChildren(...[-30, -15, -10, -5, 5, 10, 15, 30].map(d =>
+  h('button', { class: 'np-sk', title: (d < 0 ? 'Back ' : 'Forward ') + Math.abs(d) + ' seconds', text: (d < 0 ? '−' : '+') + Math.abs(d), onclick: () => seekBy(d) })));
 function setOffset(v){
   G.s.offset = Math.round(v * 10) / 10;
   $('offVal').textContent = G.s.offset.toFixed(1) + 's';

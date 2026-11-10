@@ -246,6 +246,7 @@ function showView(v){
   const navKey = (v === 'setup' || v === 'game' || v === 'room') ? 'play' : v;
   document.querySelectorAll('#mainNav button').forEach(b => b.classList.toggle('on', b.dataset.view === navKey));
   $('bar').classList.toggle('hidden', v !== 'game');
+  renderKeysLegend();
   document.body.classList.toggle('in-game', v === 'game');
   const cover = v === 'setup' ? SETUP.song?.cover : v === 'game' ? G.s?.cover : '';
   setBackdrop(cover);
@@ -1122,7 +1123,7 @@ function startGame(s, restore, mp){
   mpGameLayout();
   refreshSaveBtn();
   $('keysHint').textContent = (s.mode === 'choice' ? 'Tap a gap and press 1–4 to choose · a wrong pick is final' : 'Tab/Enter → next gap · Shift+Tab → back · a wrong word you leave is final')
-    + ' · ⌨️ Alt+1 play/pause · Alt+2 hint · Alt+3 rewind · Alt+4 end try';
+    + ' · press ? in a gap for a hint';
 
   setupPlayer(s.yt);
   showTab('challenge');
@@ -1154,6 +1155,7 @@ function updateHud(){
   $('contBtn').classList.toggle('hidden', !(playingPhase && G.wait >= 0));
   // solo: skip/scrub any time · multiplayer: locked until the game is over
   const canSeek = freeSeek() && (playingPhase || G.done);
+  renderKeysLegend();
   $('rewBtn').classList.toggle('hidden', !canSeek);
   $('npRew').classList.add('hidden');
   $('rewBtn').textContent = '⟲ 5s'; $('rewBtn').disabled = false;
@@ -1846,16 +1848,34 @@ document.addEventListener('keydown', e => {
     if (!g.input.disabled) g.input.focus({ preventScroll: true });
     return;
   }
-  // Alt+1 play/pause · Alt+2 hint · Alt+3 rewind (when allowed) · Alt+4 end the try
+  // music shortcuts, they work while you type in a gap:
+  // Alt+1 play/pause · Alt+2 back 5 s · Alt+3 back 10 s · Alt+4 forward 5 s · Alt+5 forward 10 s
   const k = e.code?.startsWith('Digit') ? e.code.slice(5) : e.key;
-  if (e.altKey && !e.ctrlKey && ['1', '2', '3', '4'].includes(k)){
+  const SKIP = { 2: -5, 3: -10, 4: 5, 5: 10 };
+  if (e.altKey && !e.ctrlKey && (k === '1' || SKIP[k])){
     e.preventDefault();
-    if (k === '1') togglePlay();
-    if (k === '2') hint(G.focus);
-    if (k === '3') rewind();
-    if (k === '4' && !$('endTryBtn').classList.contains('hidden')) $('endTryBtn').click();
+    if (k === '1'){ togglePlay(); return; }
+    if (!freeSeek()){ toast('🔒 No skipping in multiplayer'); return; }
+    if (G.phase === 'playing' || G.done) seekBy(SKIP[k]);
   }
 });
+// the shortcuts legend (bottom-left corner during a game); ✕ hides it, ⌨️ brings it back
+function renderKeysLegend(){
+  const el = $('keysLegend');
+  const on = view === 'game' && G.active && !!G.s?.yt;
+  el.classList.toggle('hidden', !on);
+  if (!on) return;
+  const hidden = store.get('keysHidden', false), seek = freeSeek();
+  el.classList.toggle('mini', hidden);
+  if (hidden){ el.replaceChildren(h('button', { class: 'kl-open', title: 'Show the keyboard shortcuts', 'aria-label': 'Show the keyboard shortcuts', text: '⌨️', onclick: () => { store.set('keysHidden', false); renderKeysLegend(); } })); return; }
+  const row = (keys, what, title) => h('span', { class: 'kl-row', title }, h('kbd', { text: keys }), what);
+  el.replaceChildren(
+    h('span', { text: '⌨️', title: 'Keyboard shortcuts (they work while you type)' }),
+    row('Alt+1', '⏯', 'Play / pause'),
+    ...(seek ? [row('Alt+2', '−5s', 'Back 5 seconds'), row('Alt+3', '−10s', 'Back 10 seconds'), row('Alt+4', '+5s', 'Forward 5 seconds'), row('Alt+5', '+10s', 'Forward 10 seconds')]
+             : [h('span', { class: 'kl-row', text: '🔒 no skipping' })]),
+    h('button', { class: 'kl-x', title: 'Hide the shortcuts', 'aria-label': 'Hide the shortcuts', text: '✕', onclick: () => { store.set('keysHidden', true); renderKeysLegend(); } }));
+}
 
 // =====================================================================
 // 🌍 translation panel: select words in the lyrics → translation (MyMemory, free)

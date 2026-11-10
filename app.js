@@ -611,7 +611,6 @@ const SETUP = { song: null, preset: 'medium', mode: 'type', opts: null, offset: 
 function openSetup(song, extra = {}){
   const prefs = store.get('prefs', {});
   SETUP.song = song;
-  SETUP.recover = extra.recover || null;
   SETUP.offset = extra.offset || 0;
   SETUP.preset = prefs.preset || 'medium';
   SETUP.mode = prefs.mode === 'choice' ? 'choice' : 'type';
@@ -861,36 +860,9 @@ $('startBtn').onclick = () => {
     opts: { density: opts.density, minLen: opts.minLen, focus: opts.focus, firstLetter: opts.firstLetter, sizeBoxes: opts.sizeBoxes, skipParens: opts.skipParens, clean: opts.clean !== false, instant: true },
     seed: newSeed(), yt, music: yt ? 'audio' : 'off', pauseLines: !!(SETUP.pauseLines && yt && song.times), oneShot: SETUP.mode === 'choice' && SETUP.oneShot, ytAlts: alts, offset: SETUP.offset
   };
-  const rec = SETUP.recover; SETUP.recover = null;          // ♻️ recovering an unfinished game from your history
-  startGame(rec ? { ...s, ...rec.s } : s, rec?.restore);
+  startGame(s);
 };
 
-// ♻️ Rebuild an unfinished game from your history: same song + level + tries, the words you
-// still had missing are the gaps, the ones you'd already solved count as done.
-const recoverable = r => r.finished === false && !r.multi && r.songId && r.missedPairs?.length;
-async function recoverGame(r){
-  toast(`♻️ Loading “${r.title}”…`);
-  let song;
-  try { song = await fetchSong(r.songId); } catch { toast('Could not load the lyrics of this song. Try again later.'); return; }
-  const key = s => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
-  const force = song.lines.map(() => []);
-  let found = 0;
-  for (const p of r.missedPairs){
-    const w = norm(p.w), l = key(p.l);
-    const li = song.lines.findIndex((ln, i) => ln && key(ln).startsWith(l) && !force[i].some(x => norm(x) === w)
-      && ln.split(/\s+/).some(t => norm(t) === w));
-    if (li >= 0){ force[li].push(p.w); found++; }
-  }
-  if (!found){ toast('Could not match the saved words with the lyrics, sorry.'); return; }
-  const preset = PRESETS[r.preset] ? r.preset : 'medium';
-  const tries = (r.scores || []).map((c, i) => ({ n: i + 1, correct: c, hints: 0, last: false }));
-  openSetup(song, { recover: {
-    s: { force, preDone: r.correct || 0, preset: r.preset || preset, mode: r.mode === 'choice' ? 'choice' : 'type',
-      opts: { ...PRESETS[preset], skipParens: false, clean: true, instant: true } },
-    restore: { session: r.id, hints: r.hints || 0, played: true, tryNo: tries.length + 1, tries, xpTotal: 0 }
-  } });
-  $('setupBait').textContent = `♻️ Recovering your game: ${r.correct || 0} words already done, ${found} still to find · next is try ${tries.length + 1}. Choose the music and press start.`;
-}
 // the game saved on this device ("continue where you left off"), if any
 function localResume(){
   if (G.active && !G.done && !G.mp)
@@ -916,9 +888,8 @@ const G = {
 };
 const head = g => g.primary || g;                         // copies of a chorus word share one "head"
 const units = () => G.gaps.filter(g => !g.primary);       // what we count: each hidden word once
-// preDone: words already solved in a recovered game (they aren't shown as gaps any more)
-const unitCount = () => units().length + (G.s?.preDone || 0);
-const lockedCount = () => units().filter(g => g.locked).length + (G.s?.preDone || 0);
+const unitCount = () => units().length;
+const lockedCount = () => units().filter(g => g.locked).length;
 const filledCount = lockedCount;
 const REWINDS = 3, REWIND_SECONDS = 20;
 
@@ -1123,7 +1094,7 @@ function startGame(s, restore, mp){
   mpGameLayout();
   refreshSaveBtn();
   $('keysHint').textContent = (s.mode === 'choice' ? 'Tap a gap and press 1–4 to choose · a wrong pick is final' : 'Tab/Enter → next gap · Shift+Tab → back · a wrong word you leave is final')
-    + ' · press ? in a gap for a hint';
+    + ' · ⌨️ Show shortcuts (bottom bar) for all the keys';
 
   setupPlayer(s.yt);
   showTab('challenge');
@@ -1601,7 +1572,7 @@ document.addEventListener('visibilitychange', () => { if (document.hidden){ save
 function restart(){
   if (!G.s) return;
   store.del('progress');
-  const { force, preDone, ...s } = G.s;           // a recovered game restarts as a normal new game
+  const { force, ...s } = G.s;                    // a restored game restarts as a normal new game
   startGame({ ...s, seed: newSeed() });
 }
 $('hintBtn').onclick = () => hint(G.focus);
@@ -1848,33 +1819,48 @@ document.addEventListener('keydown', e => {
     if (!g.input.disabled) g.input.focus({ preventScroll: true });
     return;
   }
-  // music shortcuts, they work while you type in a gap:
-  // same order as the player buttons: Alt+1 −10 s · Alt+2 −5 s · Alt+3 play/pause · Alt+4 +5 s · Alt+5 +10 s
+  // shortcuts, they work while you type in a gap (same order as the player buttons):
+  // Alt+1 −10 s · Alt+2 −5 s · Alt+3 play/pause · Alt+4 +5 s · Alt+5 +10 s · Alt+6 hint · Alt+7 end the try
   const k = e.code?.startsWith('Digit') ? e.code.slice(5) : e.key;
   const SKIP = { 1: -10, 2: -5, 4: 5, 5: 10 };
-  if (e.altKey && !e.ctrlKey && (k === '3' || SKIP[k])){
+  if (e.altKey && !e.ctrlKey && ['3', '6', '7'].includes(k)){
     e.preventDefault();
-    if (k === '3'){ togglePlay(); return; }
+    if (k === '3') togglePlay();
+    if (k === '6' && !$('hintBtn').classList.contains('hidden')) hint(G.focus);
+    if (k === '7' && !$('endTryBtn').classList.contains('hidden')) $('endTryBtn').click();
+    return;
+  }
+  if (e.altKey && !e.ctrlKey && SKIP[k]){
+    e.preventDefault();
     if (!freeSeek()){ toast('🔒 No skipping in multiplayer'); return; }
     if (G.phase === 'playing' || G.done) seekBy(SKIP[k]);
   }
 });
-// the shortcuts legend (bottom-left corner during a game); ✕ hides it, ⌨️ brings it back
+// "⌨️ Show shortcuts" tab in the bottom bar: click it to see every shortcut
+let keysOpen = false;
 function renderKeysLegend(){
   const el = $('keysLegend');
-  const on = view === 'game' && G.active && !!G.s?.yt;
+  const on = view === 'game' && G.active;
   el.classList.toggle('hidden', !on);
-  if (!on) return;
-  const hidden = store.get('keysHidden', false), seek = freeSeek();
-  el.classList.toggle('mini', hidden);
-  if (hidden){ el.replaceChildren(h('button', { class: 'kl-open', title: 'Show the keyboard shortcuts', 'aria-label': 'Show the keyboard shortcuts', text: '⌨️', onclick: () => { store.set('keysHidden', false); renderKeysLegend(); } })); return; }
-  const row = (keys, what, title) => h('span', { class: 'kl-row', title }, h('kbd', { text: keys }), what);
-  el.replaceChildren(
-    h('span', { text: '⌨️', title: 'Keyboard shortcuts (they work while you type)' }),
-    ...(seek ? [row('Alt+1', '−10s', 'Back 10 seconds'), row('Alt+2', '−5s', 'Back 5 seconds'), row('Alt+3', '⏯', 'Play / pause'), row('Alt+4', '+5s', 'Forward 5 seconds'), row('Alt+5', '+10s', 'Forward 10 seconds')]
-             : [row('Alt+3', '⏯', 'Play / pause'), h('span', { class: 'kl-row', text: '🔒 no skipping' })]),
-    h('button', { class: 'kl-x', title: 'Hide the shortcuts', 'aria-label': 'Hide the shortcuts', text: '✕', onclick: () => { store.set('keysHidden', true); renderKeysLegend(); } }));
+  if (!on){ keysOpen = false; return; }
+  const seek = freeSeek(), music = !!G.s?.yt;
+  const row = (keys, what, off) => h('div', { class: 'kl-row' + (off ? ' off' : '') }, h('kbd', { text: keys }), h('span', { text: what }));
+  const solo = seek ? '' : '  (solo only)';
+  el.replaceChildren(...[
+    h('button', { class: 'kl-tab' + (keysOpen ? ' on' : ''), 'aria-expanded': String(keysOpen), onclick: e => { e.stopPropagation(); keysOpen = !keysOpen; renderKeysLegend(); } },
+      keysOpen ? '⌨️ Hide shortcuts' : '⌨️ Show shortcuts'),
+    keysOpen ? h('div', { class: 'kl-panel', onclick: e => e.stopPropagation() },
+      h('b', { text: 'Keyboard shortcuts' }),
+      h('small', { class: 'muted', text: 'They work while you type in a gap.' }),
+      music ? [row('Alt+1', '⟲ Back 10 s' + solo, !seek), row('Alt+2', '⟲ Back 5 s' + solo, !seek), row('Alt+3', '⏯ Play / pause'),
+        row('Alt+4', '⟳ Forward 5 s' + solo, !seek), row('Alt+5', '⟳ Forward 10 s' + solo, !seek)] : null,
+      row('Alt+6', '💡 Hint'),
+      row('Alt+7', '🏁 End the try' + (G.mp && MP.role !== 'host' ? '  (host only)' : ''), !!(G.mp && MP.role !== 'host')),
+      row('Ctrl+Home', '⤒ First gap to fill'),
+      row('Ctrl+End', '⤓ Last gap you can fill now'),
+      row('?', 'Hint (inside a gap)')) : null].filter(Boolean));
 }
+document.addEventListener('click', () => { if (keysOpen){ keysOpen = false; renderKeysLegend(); } });
 
 // =====================================================================
 // 🌍 translation panel: select words in the lyrics → translation (MyMemory, free)
@@ -2239,28 +2225,22 @@ async function playFromLibrary(it){
 }
 
 // ---------- stats ----------
-// ⏸ Unfinished games: the one saved on this device + the unfinished ones in your history
-function unfinishedCard(results){
+// ⏸ the game you left in the middle (closed the page, reloaded…): continue it
+function unfinishedCard(){
   const lr = localResume();
-  const cloudOnes = results.filter(r => recoverable(r) && r.id !== lr?.session).slice(0, 10);
-  if (!lr && !cloudOnes.length) return null;
-  const row = (title, cover, sub, btnText, go) => h('li', { class: 'unf' }, tile(title, cover),
-    h('div', { class: 'c-info' }, h('b', { text: title }), h('small', { class: 'muted', text: sub })),
-    h('button', { class: 'btn small primary', text: btnText, onclick: go }));
+  if (!lr) return null;
   return h('div', { class: 'card unf-card' },
-    h('h3', { text: '⏸ Unfinished games' }),
-    h('ul', { class: 'unf-list' },
-      lr ? row(lr.title, lr.cover, 'On this device · ' + lr.sub, '▶ Continue', lr.go) : null,
-      cloudOnes.map(r => row(r.title + (r.artist ? ' · ' + r.artist : ''), '',
-        `${PRESET_LABEL[r.preset] || 'Custom'} · ${r.tries} ${r.tries === 1 ? 'try' : 'tries'} · ${r.correct}/${r.total} correct · ${timeAgo(toDate(r.updatedAt))}`,
-        '♻️ Recover', () => recoverGame(r)))));
+    h('h3', { text: '⏸ Continue your game' }),
+    h('ul', { class: 'unf-list' }, h('li', { class: 'unf' }, tile(lr.title, lr.cover),
+      h('div', { class: 'c-info' }, h('b', { text: lr.title }), h('small', { class: 'muted', text: lr.sub })),
+      h('button', { class: 'btn small primary', text: '▶ Continue', onclick: lr.go }))));
 }
 function renderStats(){
   const body = $('statsBody');
-  if (!signedIn()){ body.replaceChildren(...[unfinishedCard([]), wall('📈', 'Track your progress', 'Sign in to earn XP, keep a daily streak, see your accuracy over time and practise the words you miss most.')].filter(Boolean)); return; }
+  if (!signedIn()){ body.replaceChildren(...[unfinishedCard(), wall('📈', 'Track your progress', 'Sign in to earn XP, keep a daily streak, see your accuracy over time and practise the words you miss most.')].filter(Boolean)); return; }
   const p = cloud.state.profile || { xp: 0 };
   const results = cloud.state.results;
-  const unf = unfinishedCard(results);
+  const unf = unfinishedCard();
   const xp = p.xp || 0, lvl = levelOf(xp);
   const lo = xpForLevel(lvl), hi = xpForLevel(lvl + 1);
   const avg = results.length ? Math.round(results.reduce((a, r) => a + (r.pct || 0), 0) / results.length) : 0;
@@ -2327,7 +2307,6 @@ function gameRow(r){
       h('span', { class: 'badge', text: `${r.tries || 1} ${(r.tries || 1) === 1 ? 'TRY' : 'TRIES'}` }),
       h('span', { class: 'badge', text: `💡 ${r.hints || 0}` }),
       r.tries && r.finished === false ? h('span', { class: 'badge', text: 'UNFINISHED' }) : null,
-      recoverable(r) ? h('button', { class: 'btn small', text: '♻️ Recover', onclick: () => recoverGame(r) }) : null,
       h('span', { class: 'd', text: timeAgo(toDate(r.updatedAt)) })));
 }
 const kpi = (v, l) => h('div', { class: 'card kpi' }, h('div', { class: 'v', text: v }), h('div', { class: 'l', text: l }));

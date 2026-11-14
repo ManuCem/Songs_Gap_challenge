@@ -1687,12 +1687,15 @@ function poll(){
   }
 
   if (cur !== G.cur){
-    G.lineEls[G.cur]?.classList.remove('now'); G.solEls[G.cur]?.classList.remove('now');
+    // clear every old highlight (after a skip G.cur is reset, so "the previous line" isn't known any more)
+    document.querySelectorAll('#lyrics .line.now, #solution .line.now').forEach(el => el.classList.remove('now'));
     G.cur = cur;
     if (cur > G.reach && G.phase === 'playing'){ G.reach = cur; applyReach(); queueSave(); mpHostReach(); }
     if (cur < 0) return;
     G.lineEls[cur].classList.add('now'); G.solEls[cur].classList.add('now');
-    if ($('followChk').checked && G.wait < 0 && !document.activeElement?.closest?.('#lyrics')){
+    // follow the song (while you type we don't move the page… except right after you skipped)
+    const jumped = G.jumped; G.jumped = false;
+    if ($('followChk').checked && G.wait < 0 && (jumped || !document.activeElement?.closest?.('#lyrics'))){
       const el = $('solutionPane').classList.contains('hidden') ? G.lineEls[cur] : G.solEls[cur];
       const r = el.getBoundingClientRect();
       if (r.top < innerHeight * 0.25 || r.bottom > innerHeight * 0.7) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -1724,6 +1727,7 @@ function seekAbs(t){
   if (!playerReady || !freeSeek()) return;
   const to = Math.max(0, Math.min(t, (player.getDuration() || t) - 0.5));
   seekTo(to);
+  G.jumped = true;                     // the lyrics jump to the line being sung, even while you type
   if (G.s.times) [...G.passed].forEach(L => { if (lineTime(L) >= to - 0.5) G.passed.delete(L); });
   if (G.wait >= 0){ G.lineEls[G.wait].classList.remove('wait'); G.wait = -1; }
   if (G.phase === 'playing' || G.done) playVideo();

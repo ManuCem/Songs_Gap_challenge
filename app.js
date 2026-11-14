@@ -598,7 +598,7 @@ function renderContinue(){
     tile(title, lr.cover),
     h('div', { class: 'c-info' }, h('small', { text: 'Continue where you left off' }), h('b', { text: title }), h('small', { text: sub })),
     h('button', { class: 'btn primary', text: 'Continue →', onclick: go }),
-    h('button', { class: 'x', title: 'Dismiss', 'aria-label': 'Dismiss', text: '✕', onclick: () => { store.del('progress'); if (G.active){ G.active = false; destroyPlayer(); } box.classList.add('hidden'); } }));
+    h('button', { class: 'x', title: 'Dismiss', 'aria-label': 'Dismiss', text: '✕', onclick: () => { forgetSave(localResume()?.session); if (G.active){ G.active = false; destroyPlayer(); } box.classList.add('hidden'); } }));
   box.classList.remove('hidden');
 }
 
@@ -611,6 +611,7 @@ const SETUP = { song: null, preset: 'medium', mode: 'type', opts: null, offset: 
 function openSetup(song, extra = {}){
   const prefs = store.get('prefs', {});
   SETUP.song = song;
+  SETUP.cont = extra.cont || null;
   SETUP.offset = extra.offset || 0;
   SETUP.preset = prefs.preset || 'medium';
   SETUP.mode = prefs.mode === 'choice' ? 'choice' : 'type';
@@ -858,7 +859,8 @@ $('startBtn').onclick = () => {
     opts: { density: opts.density, minLen: opts.minLen, focus: opts.focus, firstLetter: opts.firstLetter, sizeBoxes: opts.sizeBoxes, skipParens: opts.skipParens, clean: opts.clean !== false, instant: true },
     seed: newSeed(), yt, music: yt ? 'audio' : 'off', pauseLines: !!(SETUP.pauseLines && yt && song.times), oneShot: SETUP.mode === 'choice' && SETUP.oneShot, ytAlts: alts, offset: SETUP.offset
   };
-  startGame(s);
+  const c = SETUP.cont; SETUP.cont = null;              // ▶ continuing a game from your history
+  startGame(c ? { ...s, ...c.s } : s, c?.restore);
 };
 
 // the game saved on this device ("continue where you left off"), if any
@@ -867,10 +869,37 @@ function localResume(){
     return { title: G.s.title, cover: G.s.cover, session: G.session, sub: `Try ${G.tryNo} · ${lockedCount()} / ${unitCount()} correct`, go: () => { showView('game'); if (G.phase !== 'playing') showReady(); } };
   const p = store.get('progress', null);
   if (!p?.s) return null;
-  const same = p.gv === GAPS_V || p.s.force;
-  if (!same && !p.force){ store.del('progress'); return null; }          // very old save: its gaps can't be rebuilt
+  if (!resumable(p)){ store.del('progress'); return null; }          // very old save: its gaps can't be rebuilt
   return { title: p.s.title, cover: p.s.cover, session: p.session, sub: `Try ${p.tryNo || 1} · ${p.filled || 0} / ${p.total || '?'} correct · ${timeAgo(new Date(p.at))}`,
-    go: () => startGame(same ? p.s : { ...p.s, force: p.force }, p) };
+    go: () => resumeSave(p) };
+}
+const resumable = p => !!(p?.s && (p.gv === GAPS_V || p.s.force || p.force));
+const resumeSave = p => startGame(p.gv === GAPS_V || p.s.force ? p.s : { ...p.s, force: p.force }, p);
+
+// ▶ continue an unfinished game from your history when this device doesn't have it any more:
+// same song + level + tries, the words you still had missing are the gaps, the ones you'd got count as done.
+async function continueFromHistory(r){
+  toast(`▶ Loading “${r.title}”…`);
+  let song;
+  try { song = await fetchSong(r.songId); } catch { toast('Could not load the lyrics of this song. Try again later.'); return; }
+  const key = x => String(x || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const force = song.lines.map(() => []);
+  let found = 0;
+  for (const p of r.missedPairs){
+    const w = norm(p.w), l = key(p.l);
+    const li = song.lines.findIndex((ln, i) => ln && key(ln).startsWith(l) && !force[i].some(x => norm(x) === w)
+      && ln.split(/\s+/).some(t => norm(t) === w));
+    if (li >= 0){ force[li].push(p.w); found++; }
+  }
+  if (!found){ toast('Could not match the saved words with the lyrics, sorry.'); return; }
+  const preset = PRESETS[r.preset] ? r.preset : 'medium';
+  const tries = (r.scores || []).map((c, i) => ({ n: i + 1, correct: c, hints: 0, last: false }));
+  openSetup(song, { cont: {
+    s: { force, preDone: r.correct || 0, preset, mode: r.mode === 'choice' ? 'choice' : 'type',
+      opts: { ...PRESETS[preset], skipParens: false, clean: true, instant: true } },
+    restore: { session: r.id, hints: r.hints || 0, played: true, tryNo: tries.length + 1, tries, xpTotal: 0 }
+  } });
+  $('setupBait').textContent = `▶ Continuing your game: ${r.correct || 0}/${r.total} done, ${found} words still to find · try ${tries.length + 1}. Press start.`;
 }
 
 // =====================================================================
@@ -886,8 +915,9 @@ const G = {
 };
 const head = g => g.primary || g;                         // copies of a chorus word share one "head"
 const units = () => G.gaps.filter(g => !g.primary);       // what we count: each hidden word once
-const unitCount = () => units().length;
-const lockedCount = () => units().filter(g => g.locked).length;
+// preDone: words you'd already got in a game continued from your history (they aren't gaps any more)
+const unitCount = () => units().length + (G.s?.preDone || 0);
+const lockedCount = () => units().filter(g => g.locked).length + (G.s?.preDone || 0);
 const filledCount = lockedCount;
 const REWINDS = 3, REWIND_SECONDS = 20;
 
@@ -1288,7 +1318,7 @@ function finishGame(xpLastTry){
   if (G.done) return;
   G.phase = 'done'; G.done = true; G.wait = -1;
   pauseVideo(); closeChoice();
-  store.del('progress');
+  forgetSave(G.session);
   const total = unitCount(), correct = lockedCount(), perfect = correct === total;
   let bonus = 0;
   if (perfect && !G.bonus){ G.bonus = true; bonus = (G.tries.length <= 1 ? 50 : 25) + ({ hard: 50, insane: 100 }[G.s.preset] || 0); G.xpTotal += bonus; }
@@ -1529,7 +1559,7 @@ $('tabSolution').onclick = () => showTab('solution');
 // ---------- autosave ----------
 function saveProgress(){
   if (!G.active || G.done || G.mp) return;
-  store.set('progress', {
+  const p = {
     gv: GAPS_V, s: G.s, session: G.session,
     hints: G.hints, played: G.played, at: Date.now(),
     force: G.s.force ? undefined : G.lineGaps.map(gs => gs.map(g => g.answer)),   // the gap words themselves: restorable by any future version
@@ -1538,7 +1568,17 @@ function saveProgress(){
     locked: G.gaps.map(g => g.locked ? (g.lockTry || 1) : 0),
     hinted: G.gaps.map(g => g.hinted ? 1 : 0),
     filled: lockedCount(), total: unitCount()
-  });
+  };
+  store.set('progress', p);
+  const saves = store.get('saves', {});
+  saves[p.session] = p;
+  store.set('saves', Object.fromEntries(Object.entries(saves).sort((a, b) => (b[1].at || 0) - (a[1].at || 0)).slice(0, 5)));
+}
+// a game you finished or threw away: forget it on this device
+function forgetSave(session){
+  store.del('progress');
+  const saves = store.get('saves', {});
+  if (session && saves[session]){ delete saves[session]; store.set('saves', saves); }
 }
 let saveT = 0;
 const queueSave = () => { clearTimeout(saveT); saveT = setTimeout(saveProgress, 500); };
@@ -1548,8 +1588,8 @@ document.addEventListener('visibilitychange', () => { if (document.hidden){ save
 // ---------- controls ----------
 function restart(){
   if (!G.s) return;
-  store.del('progress');
-  const { force, ...s } = G.s;                    // a restored game restarts as a normal new game
+  forgetSave(G.session);
+  const { force, preDone, ...s } = G.s;           // a continued game restarts as a normal new game
   startGame({ ...s, seed: newSeed() });
 }
 $('hintBtn').onclick = () => hint(G.focus);
@@ -2290,8 +2330,13 @@ function gameRow(r){
 }
 // an unfinished game in your history: continue it if it's the one saved on this device, otherwise close it
 function unfinishedBtn(r){
-  const lr = localResume();
-  if (lr && lr.session === r.id) return h('button', { class: 'btn small primary', text: '▶ Continue', onclick: lr.go });
+  const lr = localResume(), saved = store.get('saves', {})[r.id];
+  const go = lr && lr.session === r.id ? lr.go                       // the game open / saved on this device
+    : resumable(saved) ? () => resumeSave(saved)                    // one of your last 5 games on this device
+    : r.songId && r.missedPairs?.length ? () => continueFromHistory(r) : null;   // rebuilt from your history
+  return [go ? h('button', { class: 'btn small primary', text: '▶ Continue', onclick: go }) : null, finishBtn(r)];
+}
+function finishBtn(r){
   return h('button', { class: 'btn small', text: '🏁 Finish', title: 'Close this game with the score it has', onclick: () =>
     askConfirm('Finish this game?', `“${r.title}” is closed with ${r.correct}/${r.total} (${r.pct}%).`, '🏁 Finish', () => {
       const { id, updatedAt, ...data } = r;

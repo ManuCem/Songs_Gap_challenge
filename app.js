@@ -1091,7 +1091,7 @@ function startGame(s, restore, mp){
   $('newBtn').replaceChildren(mp ? '🚪 ' : '♪ ', h('span', { class: 'lbl', text: mp ? 'Leave room' : 'New song' }));
   mpGameLayout();
   refreshSaveBtn();
-  $('keysHint').textContent = (s.mode === 'choice' ? 'Tap a gap and press 1–4 to choose · a wrong pick is final' : 'Tab/Enter → next gap · Shift+Tab → back · a wrong word you leave is final')
+  $('keysHint').textContent = (s.mode === 'choice' ? 'Tap a gap and press 1–4 to choose · a wrong pick is final' : 'Tab/Enter → next gap · Shift+Tab → back' + (mp ? ' · a wrong word you leave is final' : ' · type as much as you like: a word turns green when it is right'))
     + ' · ⌨️ Show shortcuts (bottom bar) for all the keys';
 
   setupPlayer(s.yt);
@@ -1257,7 +1257,6 @@ function endTry(){
   if (G.wait >= 0){ G.lineEls[G.wait].classList.remove('wait'); G.wait = -1; }
   const correct = lockedCount(), total = unitCount();
   G.tries.push({ n: G.tryNo, correct, hints: G.hints - (G.tryStart?.hints || 0), last: G.lastChance });
-  G.gaps.forEach(g => { if (!g.locked && g.input.value.trim()) flashBad(g); });
   const xp = awardXp();
   if (correct === total || G.lastChance){ finishGame(xp); return; }
 
@@ -1398,8 +1397,10 @@ function markDead(g){
   G.misses = (G.misses || 0) + 1;
   mpScore('miss', g);
 }
+// solo Type mode: nothing is ever wrong. Type and edit as much as you like, a word only turns green when it's right.
+// Multiplayer: a wrong word you leave is final (and costs points).
 function commitWrong(g){
-  if (G.phase !== 'playing' || !playable(g) || G.s.mode === 'choice') return;
+  if (!G.mp || G.phase !== 'playing' || !playable(g) || G.s.mode === 'choice') return;
   const v = g.input.value.trim();
   if (!v || same(v, g.answer)) return;
   markDead(g); afterChange(g);
@@ -1706,7 +1707,6 @@ function poll(){
 function continueListen(fromPlay){
   const L = G.wait;
   if (L < 0){ if (!fromPlay) playVideo(); return; }
-  G.lineGaps[L].forEach(g => { if (!g.locked && g.input.value.trim()) flashBad(g); });
   G.passed.add(L);
   G.wait = -1;
   G.lineEls[L].classList.remove('wait');
@@ -1800,14 +1800,14 @@ document.addEventListener('keydown', e => {
     return;
   }
   // shortcuts, they work while you type in a gap (same order as the player buttons):
-  // Alt+1 −10 s · Alt+2 −5 s · Alt+3 play/pause · Alt+4 +5 s · Alt+5 +10 s · Alt+6 hint · Alt+7 end the try
+  // Alt+1 −5 s · Alt+2 play/pause · Alt+3 +5 s · Alt+4 hint · Alt+5 end the try
   const k = e.code?.startsWith('Digit') ? e.code.slice(5) : e.key;
-  const SKIP = { 1: -10, 2: -5, 4: 5, 5: 10 };
-  if (e.altKey && !e.ctrlKey && ['3', '6', '7'].includes(k)){
+  const SKIP = { 1: -5, 3: 5 };
+  if (e.altKey && !e.ctrlKey && ['2', '4', '5'].includes(k)){
     e.preventDefault();
-    if (k === '3') togglePlay();
-    if (k === '6' && !$('hintBtn').classList.contains('hidden')) hint(G.focus);
-    if (k === '7' && !$('endTryBtn').classList.contains('hidden')) $('endTryBtn').click();
+    if (k === '2') togglePlay();
+    if (k === '4' && !$('hintBtn').classList.contains('hidden')) hint(G.focus);
+    if (k === '5' && !$('endTryBtn').classList.contains('hidden')) $('endTryBtn').click();
     return;
   }
   if (e.altKey && !e.ctrlKey && SKIP[k]){
@@ -1832,10 +1832,9 @@ function renderKeysLegend(){
     keysOpen ? h('div', { class: 'kl-panel', onclick: e => e.stopPropagation() },
       h('b', { text: 'Keyboard shortcuts' }),
       h('small', { class: 'muted', text: 'They work while you type in a gap.' }),
-      music ? [row('Alt+1', '⟲ Back 10 s' + solo, !seek), row('Alt+2', '⟲ Back 5 s' + solo, !seek), row('Alt+3', '⏯ Play / pause'),
-        row('Alt+4', '⟳ Forward 5 s' + solo, !seek), row('Alt+5', '⟳ Forward 10 s' + solo, !seek)] : null,
-      row('Alt+6', '💡 Hint'),
-      row('Alt+7', '🏁 End the try' + (G.mp && MP.role !== 'host' ? '  (host only)' : ''), !!(G.mp && MP.role !== 'host')),
+      music ? [row('Alt+1', '⟲ Back 5 s' + solo, !seek), row('Alt+2', '⏯ Play / pause'), row('Alt+3', '⟳ Forward 5 s' + solo, !seek)] : null,
+      row('Alt+4', '💡 Hint'),
+      row('Alt+5', '🏁 End the try' + (G.mp && MP.role !== 'host' ? '  (host only)' : ''), !!(G.mp && MP.role !== 'host')),
       row('Ctrl+Home', '⤒ First gap to fill'),
       row('Ctrl+End', '⤓ Last gap you can fill now')) : null].filter(Boolean));
 }
@@ -2927,7 +2926,7 @@ function mpFollowTick(){
   MP.lastFollow = now;
   followHostMusic();
 }
-// players: ▶ / Alt+3 only switches the music on this phone (the host controls the game)
+// players: ▶ / Alt+2 only switches the music on this phone (the host controls the game)
 function mpPlayerToggle(){
   if (!G.mp || MP.role === 'host') return false;
   if (!G.s.yt){ toast('🎧 The host controls the music.'); return true; }

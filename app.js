@@ -622,11 +622,9 @@ function openSetup(song, extra = {}){
   $('setupTitle').textContent = song.title;
   $('setupArtist').textContent = [song.artist, song.album].filter(Boolean).join(' · ') || 'Your own lyrics';
   $('setupBait').textContent = song.artist ? '🧪 ' + bait(song.artist) : '';
-  const words = song.lines.join(' ').split(/\s+/).filter(Boolean).length;
   $('setupBadges').replaceChildren(
     song.times ? h('span', { class: 'badge synced', text: '⏱ SYNCED LYRICS' }) : h('span', { class: 'badge', text: 'LYRICS' }),
-    song.duration ? h('span', { class: 'badge', text: fmtTime(song.duration) }) : null,
-    h('span', { class: 'badge', text: `${words} WORDS` }));
+    song.duration ? h('span', { class: 'badge', text: fmtTime(song.duration) }) : null);
   $('setupCover').replaceChildren(tile(song.title, song.cover, 'lg'));
   if (!song.cover && song.src !== 'paste'){
     findCover(song.title, song.artist).then(url => {
@@ -636,7 +634,7 @@ function openSetup(song, extra = {}){
       if (view === 'setup') setBackdrop(url);
     });
   }
-  $('lyricsPreview').replaceChildren(...song.lines.filter(Boolean).slice(0, 12).map(l => h('div', { text: l })));
+  $('lyricsPreview').replaceChildren(...song.lines.filter(Boolean).slice(0, 4).map(l => h('div', { text: l })));
   SETUP.music = prefs.music === 'off' ? 'off' : 'audio';
   SETUP.custom = SETUP.yt = extra.yt || '';
   SETUP.pick = {};
@@ -813,7 +811,7 @@ function renderMusic(){
   $('musicSeg').querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.k === k));
   $('musicHint').textContent = k === 'off'
     ? '🔇 No music: fill in the gaps by yourself and press “End try” when you’re done.'
-    : '🎧 The song plays in a small music player. The version below is picked automatically; tap another one to change it.';
+    : '';
   const box = $('ytPicks');
   $('ytManual').classList.toggle('hidden', k === 'off');
   if (k === 'off'){ box.replaceChildren(); return; }
@@ -1127,12 +1125,11 @@ function updateHud(){
   // solo: skip/scrub any time · multiplayer: locked until the game is over
   const canSeek = freeSeek() && (playingPhase || G.done);
   renderKeysLegend();
-  $('rewBtn').classList.toggle('hidden', !canSeek);
   $('npRew').classList.add('hidden');
-  $('rewBtn').textContent = '⟲ 5s'; $('rewBtn').disabled = false;
   ['npSkipBack', 'npSkipFwd'].forEach(id => $(id).classList.toggle('hidden', !(G.s?.yt && freeSeek())));
   document.querySelectorAll('.np-sk').forEach(b => { b.disabled = !canSeek; });
   $('lineBtn').classList.toggle('hidden', !(G.done && G.s.times));
+  $('mediaCtrls').classList.toggle('hidden', !(G.done && G.s.times && G.s.yt));
   $('npProg').classList.toggle('scrub', canSeek);
   $('npLock').textContent = G.done ? 'Free play: tap the bar or any line' : G.mp ? '🔒 No skipping in multiplayer' : canSeek ? 'Skip or drag the bar to move' : '';
   $('tabSolution').textContent = G.done ? '👁 Solution' : '🔒 Solution';
@@ -1218,32 +1215,12 @@ function ringEl(correct, total){
 }
 function showReady(){
   if (G.mp) return mpShowReady();
-  G.phase = 'ready';
-  setInputsEnabled(false);
-  updateHud();
-  const music = !!G.s.yt, last = false;
-  const go = () => { closeModal(true); beginTry(); };
-  const readyBtn = h('button', { class: 'btn primary big', text: '▶ Ready', onclick: go });
-  if (G.optionsReady && !G.optionsDone){
-    readyBtn.disabled = true; readyBtn.textContent = '⏳ Preparing tricky options…';
-    G.optionsReady.then(() => { readyBtn.disabled = false; readyBtn.textContent = '▶ Ready'; });
-  }
-  openModal({ locked: true },
-    h('div', { class: 'big-emoji', text: last ? '❤️' : music ? '🎧' : '✍️' }),
-    h('h2', { text: last ? 'Last chance' : G.tries.length ? `Ready for try ${G.tryNo}?` : 'Ready?' }),
-    !G.tries.length && G.s.artist ? h('p', { class: 'roast', text: `🧪 Real ${fanName(G.s.artist)} fan test. Fake fans fail here.` }) : null,
-    h('p', { class: 'muted', text: last
-      ? `The song starts again. This time you can rewind ${REWIND_SECONDS} seconds ${REWINDS} times. After it, you’ll see your final results.`
-      : music
-        ? `Try ${G.tryNo}: the song plays from the start. Pause, skip back or forward (−30 … +30 s) or drag the bar whenever you want. Correct words turn green by themselves.`
-        : `Try ${G.tryNo}: fill in the gaps. Correct words turn green by themselves. Press “End try” when you’re done.` }),
-    locking() && G.tryNo === 1 && !G.tries.length ? h('p', { class: 'hint', text: '🔒 Lines unlock as the song reaches them. Once a line has played, you can always go back to it.' }) : null,
-    h('p', { class: 'hint', text: '✋ A wrong answer is final for this try, so think before you press Enter/Tab.' }),
-    triesChips(),
-    h('div', { class: 'btns' },
-      readyBtn,
-      G.tries.length ? h('button', { class: 'btn', text: '🏁 Finish & see the results', onclick: () => { closeModal(true); finishGame(0); } }) : null),
-    h('button', { class: 'link', text: '♪ Choose another song', onclick: () => { closeModal(true); showView('play'); } }));
+  G.phase = 'ready'; setInputsEnabled(false); updateHud();
+  // no "Ready?" screen: the song starts as soon as you open it (Choose mode waits for its options first)
+  const go = () => { if (G.active && G.phase === 'ready') beginTry(); };
+  if (G.optionsReady && !G.optionsDone) G.optionsReady.then(go); else go();
+  // if the browser blocked the autoplay, say how to start it
+  if (G.s.yt) setTimeout(() => { if (G.active && G.phase === 'playing' && !G.heard && !playing()) toast('▶ Tap play to start the song'); }, 5000);
 }
 
 function beginTry(){
@@ -1466,7 +1443,6 @@ function onGapKey(e, g){
     e.shiftKey ? focusPrev(g.i) : focusNext(g.i);
     return;
   }
-  if (e.key === '?'){ e.preventDefault(); hint(g); return; }
   if (G.s.mode === 'choice' && /^[1-4]$/.test(e.key)){ e.preventDefault(); pickChoice(g, +e.key - 1); return; }
   if (e.key === 'Escape') closeChoice();
 }
@@ -1625,13 +1601,13 @@ function onPlayerError(e){
     toast('The song won’t play here. If you opened the app inside VS Code, use Chrome or Edge instead.');
   }
 }
-function setPlayIcon(on){ $('playBtn').textContent = on ? '⏸' : '▶'; $('npPlay').textContent = on ? '⏸' : '▶'; }
+function setPlayIcon(on){ $('npPlay').textContent = on ? '⏸' : '▶'; }
 
 async function setupPlayer(id){
   const has = !!id;
   $('playerCol').classList.toggle('hidden', !has);
   $('gameGrid').classList.toggle('with-player', has);
-  $('mediaCtrls').classList.toggle('hidden', !has);
+  $('mediaCtrls').classList.add('hidden');          // only the ↺ Line button is left here: shown after the game
   $('syncBox').classList.toggle('hidden', !(has && G.s.times));
   $('offVal').textContent = (G.s.offset || 0).toFixed(1) + 's';
   $('npTitle').textContent = G.s.title;
@@ -1761,8 +1737,8 @@ function togglePlay(){
   if (G.wait >= 0){ continueListen(); return; }
   playing() ? player.pauseVideo() : player.playVideo();
 }
-$('rewBtn').onclick = $('npRew').onclick = rewind;
-$('playBtn').onclick = $('npPlay').onclick = togglePlay;
+$('npRew').onclick = rewind;
+$('npPlay').onclick = togglePlay;
 $('lineBtn').onclick = replayLine;
 // tap or drag the progress bar to move through the song
 {
@@ -1857,8 +1833,7 @@ function renderKeysLegend(){
       row('Alt+6', '💡 Hint'),
       row('Alt+7', '🏁 End the try' + (G.mp && MP.role !== 'host' ? '  (host only)' : ''), !!(G.mp && MP.role !== 'host')),
       row('Ctrl+Home', '⤒ First gap to fill'),
-      row('Ctrl+End', '⤓ Last gap you can fill now'),
-      row('?', 'Hint (inside a gap)')) : null].filter(Boolean));
+      row('Ctrl+End', '⤓ Last gap you can fill now')) : null].filter(Boolean));
 }
 document.addEventListener('click', () => { if (keysOpen){ keysOpen = false; renderKeysLegend(); } });
 
@@ -2307,7 +2282,18 @@ function gameRow(r){
       h('span', { class: 'badge', text: `${r.tries || 1} ${(r.tries || 1) === 1 ? 'TRY' : 'TRIES'}` }),
       h('span', { class: 'badge', text: `💡 ${r.hints || 0}` }),
       r.tries && r.finished === false ? h('span', { class: 'badge', text: 'UNFINISHED' }) : null,
+      r.finished === false && !r.multi ? unfinishedBtn(r) : null,
       h('span', { class: 'd', text: timeAgo(toDate(r.updatedAt)) })));
+}
+// an unfinished game in your history: continue it if it's the one saved on this device, otherwise close it
+function unfinishedBtn(r){
+  const lr = localResume();
+  if (lr && lr.session === r.id) return h('button', { class: 'btn small primary', text: '▶ Continue', onclick: lr.go });
+  return h('button', { class: 'btn small', text: '🏁 Finish', title: 'Close this game with the score it has', onclick: () =>
+    askConfirm('Finish this game?', `“${r.title}” is closed with ${r.correct}/${r.total} (${r.pct}%).`, '🏁 Finish', () => {
+      const { id, updatedAt, ...data } = r;
+      cloud.saveResult(id, { ...data, finished: true }).then(() => toast('🏁 Game finished')).catch(e => { console.error(e); toast('Could not update this game.'); });
+    }) });
 }
 const kpi = (v, l) => h('div', { class: 'card kpi' }, h('div', { class: 'v', text: v }), h('div', { class: 'l', text: l }));
 function chart(rs){

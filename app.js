@@ -1079,7 +1079,7 @@ function startGame(s, restore, mp){
       g.input = inp; g.ph = inp.placeholder;
       inp.addEventListener('focus', () => { G.focus = g; if (s.mode === 'choice' && !g.locked) openChoice(g); });
       inp.addEventListener('click', () => { if (s.mode === 'choice' && !g.locked) openChoice(g); });
-      inp.addEventListener('blur', () => { if (g.input.value.trim().length >= g.answer.length) commitWrong(g); setTimeout(() => { if (G.choiceFor === g && document.activeElement !== inp) closeChoice(); }, 150); });
+      inp.addEventListener('blur', () => { setTimeout(() => { if (G.choiceFor === g && document.activeElement !== inp) closeChoice(); }, 150); });
       inp.addEventListener('input', () => onGapInput(g));
       inp.addEventListener('keydown', e => onGapKey(e, g));
       d.append(h('span', { class: 'gap' }, t.pre || '', inp, (t.suf || '') + ' '));
@@ -1121,7 +1121,7 @@ function startGame(s, restore, mp){
   $('newBtn').replaceChildren(mp ? '🚪 ' : '♪ ', h('span', { class: 'lbl', text: mp ? 'Leave room' : 'New song' }));
   mpGameLayout();
   refreshSaveBtn();
-  $('keysHint').textContent = (s.mode === 'choice' ? 'Tap a gap and press 1–4 to choose · a wrong pick is final' : 'Tab/Enter → next gap · Shift+Tab → back' + (mp ? ' · a wrong word you leave is final' : ' · type as much as you like: a word turns green when it is right'))
+  $('keysHint').textContent = (s.mode === 'choice' ? 'Tap a gap and press 1–4 to choose · a wrong pick is final' : 'Tab/Enter → next gap · Shift+Tab → back · type as much as you like: a word turns green when it is right')
     + ' · ⌨️ Show shortcuts (bottom bar) for all the keys';
 
   setupPlayer(s.yt);
@@ -1265,8 +1265,17 @@ function beginTry(){
   setInputsEnabled(true);
   updateHud();
   if (G.s.yt){ if (playerReady) startPlayback(); else G.pendingStart = true; }
-  if (G.s.mode !== 'choice' && !G.s.pauseLines) focusNext(-1, true);
+  jumpToGap(true);                     // every try starts on your first open gap
   saveProgress();
+}
+// scroll to (and type in) the first / last gap you can still fill
+function jumpToGap(first){
+  if (!G.gaps.length) return;
+  const list = first ? G.gaps : [...G.gaps].reverse();
+  const g = list.find(g => playable(g)) || list.find(g => !g.locked);
+  if (!g) return;
+  g.input.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  if (G.s.mode !== 'choice' && !g.input.disabled) g.input.focus({ preventScroll: true });
 }
 
 function awardXp(){
@@ -1408,6 +1417,10 @@ function lockGap(g, silent){
     x.locked = true; x.dead = false; x.lockTry = lt;
     x.input.value = x.answer;
     x.input.classList.remove('bad', 'dead');
+    // keep the box exactly as wide as it was: the box is sized in "ch" and bold green text has a wider "ch",
+    // so without this the box grows and the rest of the line jumps
+    const w = x.input.getBoundingClientRect().width;
+    if (w) x.input.style.width = w + 'px';
     x.input.classList.add('ok');
     if (!silent){ x.input.classList.remove('pop'); void x.input.offsetWidth; x.input.classList.add('pop'); }
     x.input.readOnly = true;
@@ -1426,14 +1439,6 @@ function markDead(g){
   flashBad(g);
   G.misses = (G.misses || 0) + 1;
   mpScore('miss', g);
-}
-// solo Type mode: nothing is ever wrong. Type and edit as much as you like, a word only turns green when it's right.
-// Multiplayer: a wrong word you leave is final (and costs points).
-function commitWrong(g){
-  if (!G.mp || G.phase !== 'playing' || !playable(g) || G.s.mode === 'choice') return;
-  const v = g.input.value.trim();
-  if (!v || same(v, g.answer)) return;
-  markDead(g); afterChange(g);
 }
 function flashBad(g){ g.input.classList.remove('bad'); void g.input.offsetWidth; g.input.classList.add('bad'); }
 const playable = g => !g.locked && !g.dead && !isFuture(g.line);
@@ -1470,7 +1475,6 @@ function onGapKey(e, g){
   if (e.key === 'Enter' || e.key === 'Tab'){
     e.preventDefault();
     if (e.key === 'Enter' && G.s.pauseLines && G.wait === g.line){ continueListen(); return; }
-    commitWrong(g);                              // leaving a wrong word = final answer
     e.shiftKey ? focusPrev(g.i) : focusNext(g.i);
     return;
   }
@@ -1538,8 +1542,12 @@ function refreshSolution(){
   G.gaps.forEach(g => {
     const attempt = g.input.value.trim();
     const ok = g.locked;
-    g.sol.className = 'sol ' + (ok ? 'ok' : 'miss');
-    g.sol.title = ok ? `Found in ${g.lockTry === 9 ? 'the last chance' : 'try ' + g.lockTry}` : (attempt ? `You wrote: ${attempt}` : 'Left empty');
+    // (not when it's just the start of the right word: a hint letter or a word you hadn't finished)
+    const wrote = !ok && attempt && !same(attempt, g.answer) && !norm(g.answer).startsWith(norm(attempt));
+    g.sol.className = 'sol ' + (ok ? 'ok' : 'miss') + (wrote ? ' wrote' : '');
+    g.sol.title = ok ? `Found in try ${g.lockTry}` : (attempt ? `You wrote: ${attempt}` : 'Left empty');
+    // missed: your answer crossed out on top, the real word under it ("six" → "ten")
+    g.sol.replaceChildren(...(wrote ? [h('s', { class: 'sol-you', text: attempt }), h('span', { text: g.answer })] : [g.answer]));
   });
 }
 function showTab(name){
@@ -1833,27 +1841,28 @@ document.addEventListener('keydown', e => {
   // Ctrl+Home → first gap you still have to fill · Ctrl+End → the last one you can fill right now
   if (e.ctrlKey && (e.key === 'Home' || e.key === 'End') && !$('challengePane').classList.contains('hidden') && $('overlay').classList.contains('hidden') && G.gaps.length){
     e.preventDefault();
-    const list = e.key === 'Home' ? G.gaps : [...G.gaps].reverse();
-    const g = list.find(g => playable(g)) || list.find(g => !g.locked) || list[0];
-    g.input.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    if (!g.input.disabled) g.input.focus({ preventScroll: true });
+    jumpToGap(e.key === 'Home');
     return;
   }
-  // shortcuts, they work while you type in a gap (same order as the player buttons):
-  // Alt+1 −5 s · Alt+2 play/pause · Alt+3 +5 s · Alt+4 hint · Alt+5 end the try
+  // one-key shortcuts that work while you type (side by side on the keyboard):
+  //   ,  back 5 s   ·   .  play / pause   ·   -  forward 5 s   ·   Alt+4 hint   ·   Alt+5 end the try
+  const ONE = { ',': -5, '.': 0, '-': 5 };
+  if (e.key in ONE && !e.ctrlKey && !e.altKey && !e.metaKey && $('overlay').classList.contains('hidden')){
+    const gap = e.target?.closest?.('#lyrics') ? G.gaps.find(g => g.input === e.target) : null;
+    const otherField = !gap && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target?.tagName || '');
+    if (!otherField && !(gap && gap.answer.includes(e.key))){          // a word like "step-sis" can still be typed
+      e.preventDefault();
+      if (e.key === '.'){ togglePlay(); return; }
+      if (!freeSeek()){ toast('🔒 No skipping in multiplayer'); return; }
+      if (G.phase === 'playing' || G.done) seekBy(ONE[e.key]);
+      return;
+    }
+  }
   const k = e.code?.startsWith('Digit') ? e.code.slice(5) : e.key;
-  const SKIP = { 1: -5, 3: 5 };
-  if (e.altKey && !e.ctrlKey && ['2', '4', '5'].includes(k)){
+  if (e.altKey && !e.ctrlKey && (k === '4' || k === '5')){
     e.preventDefault();
-    if (k === '2') togglePlay();
     if (k === '4' && !$('hintBtn').classList.contains('hidden')) hint(G.focus);
     if (k === '5' && !$('endTryBtn').classList.contains('hidden')) $('endTryBtn').click();
-    return;
-  }
-  if (e.altKey && !e.ctrlKey && SKIP[k]){
-    e.preventDefault();
-    if (!freeSeek()){ toast('🔒 No skipping in multiplayer'); return; }
-    if (G.phase === 'playing' || G.done) seekBy(SKIP[k]);
   }
 });
 // "⌨️ Show shortcuts" tab in the bottom bar: click it to see every shortcut
@@ -1872,7 +1881,7 @@ function renderKeysLegend(){
     keysOpen ? h('div', { class: 'kl-panel', onclick: e => e.stopPropagation() },
       h('b', { text: 'Keyboard shortcuts' }),
       h('small', { class: 'muted', text: 'They work while you type in a gap.' }),
-      music ? [row('Alt+1', '⟲ Back 5 s' + solo, !seek), row('Alt+2', '⏯ Play / pause'), row('Alt+3', '⟳ Forward 5 s' + solo, !seek)] : null,
+      music ? [row(',', '⟲ Back 5 s' + solo, !seek), row('.', '⏯ Play / pause'), row('-', '⟳ Forward 5 s' + solo, !seek)] : null,
       row('Alt+4', '💡 Hint'),
       row('Alt+5', '🏁 End the try' + (G.mp && MP.role !== 'host' ? '  (host only)' : ''), !!(G.mp && MP.role !== 'host')),
       row('Ctrl+Home', '⤒ First gap to fill'),
@@ -2492,7 +2501,7 @@ function openHostModal(kind){
       if (st.hostPlays) store.set('nick', name);
       const code = await c.createRoom({
         status: 'lobby', locked: false, banned: [], hostPlays: st.hostPlays, teams: st.teams, musicAll: st.musicAll, hostName: name, hostPhoto: myPhoto(),
-        format: 'tries', triesTotal: 2, rounds: 1, missPts: 1, settings: roomSettings(), songs: songs.map(s => ({ ...s, seed: newSeed() })),
+        format: 'tries', triesTotal: 2, rounds: 1, settings: roomSettings(), songs: songs.map(s => ({ ...s, seed: newSeed() })),
         current: 0, played: [], tryNo: 1, reach: -1, hideBoard: false, spinId: 0, songPos: 0, songSeq: 0
       });
       if (st.hostPlays) await c.setPlayer(code, freshPlayer(name));
@@ -2818,13 +2827,10 @@ function renderLobby(){
       segEl([1, 2, 3], r.triesTotal || 1, v => cloud.updateRoom(MP.code, { triesTotal: v, format: 'tries' }), v => `${v} ${v === 1 ? 'try' : 'tries'}`)) : null,
     host && songs.length > 1 ? h('div', { class: 'lobby-fmt' }, h('b', { text: 'Songs to play (a wheel picks them · 1 try each)' }),
       segEl(songs.map((_, i) => i + 1), roundsOf(r), v => cloud.updateRoom(MP.code, { rounds: v }))) : null,
-    host ? h('div', { class: 'lobby-fmt' }, h('b', { text: '❌ A wrong answer costs (points)' }),
-      segEl(MISS_OPTS, missPts(r), v => cloud.updateRoom(MP.code, { missPts: v }), v => v ? `−${v}` : '0')) : null,
     songs.length ? h('div', { class: 'res-stats', style: 'justify-content:flex-start;margin:10px 0 4px' },
       h('span', { class: 'pill', text: r.format === 'playlist' ? `🎡 ${roundsOf(r)} of ${songs.length} songs` : `🔁 ${r.triesTotal} ${r.triesTotal === 1 ? 'try' : 'tries'}` }),
       h('span', { class: 'pill', text: PRESET_LABEL[s.preset] || 'Custom' }),
       h('span', { class: 'pill', text: s.mode === 'choice' ? '🎯 Choose' : '✍️ Type' }),
-      h('span', { class: 'pill', text: missPts(r) ? `❌ −${missPts(r)} per miss` : '❌ Misses: 0 pts' }),
       h('span', { class: 'pill', text: r.musicAll ? '🔊 Music on every phone' : '🖥 Music on the host only' }),
       r.teams ? h('span', { class: 'pill', text: '🔴 vs 🔵 teams' }) : null,
       r.locked ? h('span', { class: 'pill', text: '🔒 Locked' }) : null) : null].filter(Boolean));
@@ -2971,7 +2977,7 @@ function mpFollowTick(){
   MP.lastFollow = now;
   followHostMusic();
 }
-// players: ▶ / Alt+2 only switches the music on this phone (the host controls the game)
+// players: ▶ / the . key only switches the music on this phone (the host controls the game)
 function mpPlayerToggle(){
   if (!G.mp || MP.role === 'host') return false;
   if (!G.s.yt){ toast('🎧 The host controls the music.'); return true; }
@@ -3001,7 +3007,7 @@ function mpShowReady(){
     h('div', { class: 'big-emoji', text: '👥' }), h('h2', { text: title }),
     h('p', { class: 'muted', text: `${G.s.title} · ${G.s.artist}` }),
     h('p', { class: 'hint', text: G.mp.hostOnly ? 'The song plays on this screen (and on the phones if 🔊 is on). The live scores show here.'
-      : `+1 per word · ${missText(r)} (and it stays wrong) · a word you solved with a hint gives 0.` }),
+      : '+1 per word · type as much as you like · a word you solved with a hint gives 0.' }),
     h('div', { class: 'btns' }, btn, sound),
     h('button', { class: 'link', text: host ? '🚪 Close the room' : '🚪 Leave the room', onclick: askLeaveRoom }));
 }
@@ -3182,15 +3188,12 @@ function mpHud(){
 }
 
 // ---------- points: +1 per word, −(host's choice) per wrong answer (a word solved with a hint gives 0) ----------
-const MISS_OPTS = [0, 1, 2, 3, 5];
-const missPts = r => MISS_OPTS.includes(r?.missPts) ? r.missPts : 1;
-const missText = r => missPts(r) ? `−${missPts(r)} per wrong answer` : 'wrong answers cost nothing';
 function mpScore(kind, g){
   if (!G.mp || G.mp.hostOnly || G.phase !== 'playing') return;
   let delta = 0;
   if (kind === 'ok') delta = head(g).hinted ? 0 : 1;
   else if (kind === 'hint') MP.hints++;
-  else { MP.misses++; delta = -missPts(MP.room); }
+  else MP.misses++;                     // a wrong pick (Choose mode) costs nothing, it just loses that word for the try
   MP.points += delta;
   if (delta && g?.input) floatPts(g, delta);
   mpHud(); queuePlayerSync();

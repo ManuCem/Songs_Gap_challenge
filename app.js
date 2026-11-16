@@ -1135,6 +1135,8 @@ function startGame(s, restore, mp){
     });
   }
   setInputsEnabled(false);
+  G.review = !!restore?.review;
+  if (G.review){ enterReview(); return true; }
   updateHud();
   saveProgress();
   showReady();
@@ -1323,6 +1325,16 @@ function endTry(){
   syncAttempt(false, xp);
 }
 
+// 👁 reopening a finished game from your history: nothing is played, scored or saved
+function enterReview(){
+  G.phase = 'done'; G.done = true; G.wait = -1;
+  setInputsEnabled(false);
+  applyReach();
+  G.lineEls.forEach((el, i) => { if (G.s.yt && G.s.times && G.parsed[i]) el.classList.add('seek'); });
+  G.solEls.forEach((el, i) => { if (G.s.yt && G.s.times && G.parsed[i]) el.classList.add('seek'); });
+  updateHud();
+  showTab('solution');
+}
 function finishGame(xpLastTry){
   if (G.done) return;
   G.phase = 'done'; G.done = true; G.wait = -1;
@@ -1368,8 +1380,50 @@ function buildDetail(final){
     correct, total, pct: Math.round(correct / total * 100), mode: G.s.mode, preset: G.s.preset, hints: G.hints,
     tries: G.tries.length, scores: G.tries.map(t => t.correct).slice(0, 50), lastChance: G.lastChance, finished: final,
     missed: missed.map(g => g.answer).slice(0, 200),
-    missedPairs: missed.slice(0, 100).map(g => ({ w: g.answer, l: G.s.lines[g.line].slice(0, 300) }))
+    missedPairs: missed.slice(0, 100).map(g => ({ w: g.answer, l: G.s.lines[g.line].slice(0, 300) })),
+    run: runRecord()
   };
+}
+// everything needed to reopen this exact game later (review a finished one, continue an unfinished one)
+function runRecord(){
+  if (G.mp) return undefined;
+  const p = progressData();
+  const { lines, times, ...rest } = p.s;
+  p.s = G.s.src === 'lrclib' ? rest : { ...rest, lines, times };      // pasted lyrics can't be fetched again
+  const txt = JSON.stringify(p);
+  return txt.length <= 300000 ? txt : undefined;
+}
+// a result's record → a save we can open (fetches the lyrics again)
+async function runFromResult(r){
+  let p; try { p = JSON.parse(r.run); } catch { return null; }
+  if (!p?.s) return null;
+  if (!p.s.lines){
+    try { const song = await fetchSong(p.s.id || r.songId); p.s = { ...p.s, lines: song.lines, times: song.times }; }
+    catch { toast('Could not load the lyrics of this song. Try again later.'); return null; }
+  }
+  return p;
+}
+async function reviewGame(r){
+  toast(`👁 Opening “${r.title}”…`);
+  const p = await runFromResult(r);
+  if (p) resumeSave({ ...p, review: true });
+}
+async function continueRun(r){
+  toast(`▶ Loading “${r.title}”…`);
+  const p = await runFromResult(r);
+  if (p) resumeSave(p);
+}
+// older games (saved before full records): list the words you missed, in their line
+function missedWords(r){
+  const pairs = r.missedPairs || [];
+  const esc = w => w.replace(/[.*+?^${}()|[\]\\]/g, m => '\\' + m);
+  const line = p => { const parts = p.l.split(new RegExp(`(\\b${esc(p.w)}\\b)`, 'i'));
+    return h('li', null, ...parts.map((x, i) => i % 2 ? h('b', { class: 'mw-word', text: x }) : x)); };
+  openModal(
+    h('h2', { text: `👁 What you missed · ${r.title}` }),
+    h('p', { class: 'muted', text: `${r.total - r.correct} words missed${pairs.length < r.total - r.correct ? ` (the first ${pairs.length} were saved)` : ''}. This game was saved before full records, so what you typed isn't known.` }),
+    h('ol', { class: 'mw-list' }, pairs.map(line)),
+    h('div', { class: 'btns' }, h('button', { class: 'btn primary', text: 'OK', onclick: () => closeModal() })));
 }
 function boardKey(s){
   if (s.src !== 'lrclib' || s.preset === 'custom') return null;
@@ -1384,7 +1438,12 @@ async function syncAttempt(final, xp){
   const d = buildDetail(final);
   if (note()) note().textContent = 'Saving…';
   try {
-    await cloud.saveResult(G.session, d);
+    try { await cloud.saveResult(G.session, d); }
+    catch (e){
+      if (!d.run || !/permission/i.test(e.code || e.message || '')) throw e;
+      console.warn('Saving without the full game record (republish firestore.rules to keep it):', e.code);
+      delete d.run; await cloud.saveResult(G.session, d);
+    }
     if (xp > 0) await cloud.addXp(xp);
     if (final){
       const key = songKey(G.s), lib = cloud.state.library.get(key);
@@ -1565,9 +1624,8 @@ $('tabChallenge').onclick = () => showTab('challenge');
 $('tabSolution').onclick = () => showTab('solution');
 
 // ---------- autosave ----------
-function saveProgress(){
-  if (!G.active || G.done || G.mp) return;
-  const p = {
+function progressData(){
+  return {
     gv: GAPS_V, s: G.s, session: G.session,
     hints: G.hints, played: G.played, at: Date.now(),
     force: G.s.force ? undefined : G.lineGaps.map(gs => gs.map(g => g.answer)),   // the gap words themselves: restorable by any future version
@@ -1577,6 +1635,10 @@ function saveProgress(){
     hinted: G.gaps.map(g => g.hinted ? 1 : 0),
     filled: lockedCount(), total: unitCount()
   };
+}
+function saveProgress(){
+  if (!G.active || G.done || G.mp || G.review) return;
+  const p = progressData();
   store.set('progress', p);
   const saves = store.get('saves', {});
   saves[p.session] = p;
@@ -2335,6 +2397,8 @@ function gameRow(r){
       h('span', { class: 'badge', text: `💡 ${r.hints || 0}` }),
       r.tries && r.finished === false ? h('span', { class: 'badge', text: 'UNFINISHED' }) : null,
       r.finished === false && !r.multi ? unfinishedBtn(r) : null,
+      r.finished !== false && !r.multi ? (r.run ? h('button', { class: 'btn small', text: '👁 Review', title: 'See this game again: your answers and what you missed', onclick: () => reviewGame(r) })
+        : r.missedPairs?.length ? h('button', { class: 'btn small', text: '👁 Missed words', onclick: () => missedWords(r) }) : null) : null,
       h('span', { class: 'd', text: timeAgo(toDate(r.updatedAt)) })));
 }
 // an unfinished game in your history: continue it if it's the one saved on this device, otherwise close it
@@ -2342,8 +2406,10 @@ function unfinishedBtn(r){
   const lr = localResume(), saved = store.get('saves', {})[r.id];
   const go = lr && lr.session === r.id ? lr.go                       // the game open / saved on this device
     : resumable(saved) ? () => resumeSave(saved)                    // one of your last 5 games on this device
-    : r.songId && r.missedPairs?.length ? () => continueFromHistory(r) : null;   // rebuilt from your history
-  return [go ? h('button', { class: 'btn small primary', text: '▶ Continue', onclick: go }) : null, finishBtn(r)];
+    : r.run ? () => continueRun(r)                                  // the full record in your history (exact)
+    : r.songId && r.missedPairs?.length ? () => continueFromHistory(r) : null;   // older games: rebuilt from the missed words
+  return [go ? h('button', { class: 'btn small primary', text: '▶ Continue', onclick: go }) : null,
+    !r.run && r.missedPairs?.length ? h('button', { class: 'btn small', text: '👁 Missed words', onclick: () => missedWords(r) }) : null, finishBtn(r)];
 }
 function finishBtn(r){
   return h('button', { class: 'btn small', text: '🏁 Finish', title: 'Close this game with the score it has', onclick: () =>

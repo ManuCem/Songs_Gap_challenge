@@ -22,12 +22,13 @@ service cloud.firestore {
         allow create, update: if isOwner(uid)
           && d().keys().hasOnly(['title', 'artist', 'songId', 'correct', 'total', 'pct', 'missed', 'missedPairs',
                                  'mode', 'preset', 'seconds', 'hints', 'tries', 'scores', 'lastChance', 'finished',
-                                 'multi', 'room', 'place', 'players', 'points', 'updatedAt'])
+                                 'multi', 'room', 'place', 'players', 'points', 'run', 'updatedAt'])
           && d().title is string && d().title.size() <= 200
           && d().correct is int && d().total is int && d().pct is int
           && d().missed is list && d().missed.size() <= 200
           && (!('missedPairs' in d()) || (d().missedPairs is list && d().missedPairs.size() <= 100))
           && (!('scores' in d()) || (d().scores is list && d().scores.size() <= 50))
+          && (!('run' in d()) || (d().run is string && d().run.size() <= 300000))
           && d().updatedAt == request.time;
       }
 

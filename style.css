@@ -852,3 +852,7 @@ body.picking .hero{margin-top:24px}
 /* solution: a missed word shows what you wrote, crossed out, right above the real word */
 .sol.wrote{display:inline-flex;flex-direction:column;align-items:center;vertical-align:bottom;line-height:1.15;padding-top:2px}
 .sol-you{font-size:.8em;font-weight:600;color:var(--bad);text-decoration-thickness:1px;margin-bottom:1px;max-width:14ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* 👁 missed words of an older game */
+.mw-list{text-align:left;max-height:55vh;overflow:auto;margin:6px 0 14px;padding-left:28px;display:grid;gap:6px;font-size:.92rem;color:var(--muted)}
+.mw-word{color:var(--warn);background:var(--warn-bg);border-radius:6px;padding:0 4px}

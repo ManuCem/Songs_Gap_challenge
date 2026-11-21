@@ -890,18 +890,18 @@ async function gameFromMissed(r){
   let song;
   try { song = await fetchSong(r.songId); } catch { toast('Could not load the lyrics of this song. Try again later.'); return null; }
   const key = x => String(x || '').toLowerCase().replace(/\s+/g, ' ').trim();
-  const force = song.lines.map(() => []);
+  const force = song.lines.map(() => []), typed = [];
   let found = 0;
   for (const p of r.missedPairs){
     const w = norm(p.w), l = key(p.l);
     const li = song.lines.findIndex((ln, i) => ln && key(ln).startsWith(l) && !force[i].some(x => norm(x) === w)
       && ln.split(/\s+/).some(t => norm(t) === w));
-    if (li >= 0){ force[li].push(p.w); found++; }
+    if (li >= 0){ force[li].push(p.w); found++; if (p.y) typed.push({ li, w, y: p.y }); }
   }
   if (!found){ toast('Could not match the saved words with the lyrics, sorry.'); return null; }
   const preset = PRESETS[r.preset] ? r.preset : 'medium';
   const tries = (r.scores || []).map((c, i) => ({ n: i + 1, correct: c, hints: 0, last: false }));
-  return { song, found,
+  return { song, found, typed,
     s: { force, preDone: r.correct || 0, preset, mode: r.mode === 'choice' ? 'choice' : 'type',
       opts: { ...PRESETS[preset], skipParens: false, clean: true, instant: true } },
     restore: { session: r.id, hints: r.hints || 0, played: true, tryNo: tries.length + 1, tries, xpTotal: 0 } };
@@ -930,6 +930,9 @@ async function seeSolution(r){
   const song = g.song;
   startGame({ src: 'lrclib', id: song.id, title: r.title || song.title, artist: r.artist || song.artist, cover: song.cover || '', duration: song.duration || 0,
     lines: song.lines, times: song.times, seed: newSeed(), yt, music: yt ? 'audio' : 'off', offset: 0, ...g.s }, { ...g.restore, review: true });
+  // put back what you typed (saved with each missed word), then redraw the solution
+  for (const t of g.typed){ const gap = G.gaps.find(x => x.line === t.li && norm(x.answer) === t.w && !x.input.value); if (gap) gap.input.value = t.y; }
+  if (g.typed.length) refreshSolution();
 }
 
 // =====================================================================
@@ -1410,7 +1413,8 @@ function buildDetail(final){
     correct, total, pct: Math.round(correct / total * 100), mode: G.s.mode, preset: G.s.preset, hints: G.hints,
     tries: G.tries.length, scores: G.tries.map(t => t.correct).slice(0, 50), lastChance: G.lastChance, finished: final,
     missed: missed.map(g => g.answer).slice(0, 200),
-    missedPairs: missed.slice(0, 100).map(g => ({ w: g.answer, l: G.s.lines[g.line].slice(0, 300) })),
+    // y = what you typed for that word (kept here too, so it's saved even if the rules don't allow the full record)
+    missedPairs: missed.slice(0, 100).map(g => { const y = g.input.value.trim().slice(0, 60); return y ? { w: g.answer, l: G.s.lines[g.line].slice(0, 300), y } : { w: g.answer, l: G.s.lines[g.line].slice(0, 300) }; }),
     run: runRecord()
   };
 }

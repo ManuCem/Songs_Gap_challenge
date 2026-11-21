@@ -390,7 +390,7 @@ kbd{font:600 .72rem var(--font);padding:1px 6px;border-radius:5px;background:var
 .kpi .l{color:var(--muted);font-size:.85rem}
 .stats-grid{display:grid;grid-template-columns:1.35fr 1fr;gap:12px;margin-top:12px}
 @media (max-width:860px){ .stats-grid{grid-template-columns:1fr} }
-.chart svg{width:100%;height:auto;display:block;margin-top:6px}
+.chart svg{width:100%;height:auto;max-height:230px;display:block;margin-top:6px}
 .chart .bar-r{fill:var(--accent-line)}
 .chart .bar-r.perfect{fill:var(--ok)}
 .chart .grid-l{stroke:var(--border);stroke-dasharray:3 4}
@@ -849,10 +849,9 @@ body.picking .hero{margin-top:24px}
 .kl-row kbd{font:700 .72rem var(--font);background:var(--surface-2);border:1px solid var(--border);border-bottom-width:2px;border-radius:6px;padding:2px 7px;min-width:74px;text-align:center}
 @media (max-width:760px), (hover:none){ .keys-legend{display:none!important} }
 
-/* solution: a missed word shows what you wrote, crossed out, right above the real word */
-.sol.wrote{display:inline-flex;flex-direction:column;align-items:center;vertical-align:bottom;line-height:1.15;padding-top:2px}
-.sol-you{font-size:.8em;font-weight:600;color:var(--bad);text-decoration-thickness:1px;margin-bottom:1px;max-width:14ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-
-/* 👁 missed words of an older game */
-.mw-list{text-align:left;max-height:55vh;overflow:auto;margin:6px 0 14px;padding-left:28px;display:grid;gap:6px;font-size:.92rem;color:var(--muted)}
-.mw-word{color:var(--warn);background:var(--warn-bg);border-radius:6px;padding:0 4px}
+/* solution: a missed word shows what you wrote, crossed out, floating right above the real word
+   (a CSS label, so it can't be selected and never ends up in the translator) */
+.sol.wrote{position:relative;margin-top:1.15em}
+.sol.wrote::before{content:attr(data-you);position:absolute;left:50%;bottom:100%;transform:translateX(-50%);margin-bottom:1px;
+  font-size:.72em;font-weight:600;line-height:1.2;color:var(--bad);text-decoration:line-through;text-decoration-thickness:1px;white-space:nowrap;
+  max-width:16ch;overflow:hidden;text-overflow:ellipsis;pointer-events:none;user-select:none;-webkit-user-select:none}

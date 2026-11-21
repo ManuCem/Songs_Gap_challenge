@@ -880,8 +880,15 @@ const resumeSave = p => startGame(p.gv === GAPS_V || p.s.force ? p.s : { ...p.s,
 // same song + level + tries, the words you still had missing are the gaps, the ones you'd got count as done.
 async function continueFromHistory(r){
   toast(`▶ Loading “${r.title}”…`);
+  const g = await gameFromMissed(r);
+  if (!g) return;
+  openSetup(g.song, { cont: { s: g.s, restore: g.restore } });
+  $('setupBait').textContent = `▶ Continuing your game: ${r.correct || 0}/${r.total} done, ${g.found} words still to find · try ${g.restore.tryNo}. Press start.`;
+}
+// an older result (no full record): rebuild its game from the words you missed + their lines
+async function gameFromMissed(r){
   let song;
-  try { song = await fetchSong(r.songId); } catch { toast('Could not load the lyrics of this song. Try again later.'); return; }
+  try { song = await fetchSong(r.songId); } catch { toast('Could not load the lyrics of this song. Try again later.'); return null; }
   const key = x => String(x || '').toLowerCase().replace(/\s+/g, ' ').trim();
   const force = song.lines.map(() => []);
   let found = 0;
@@ -891,15 +898,38 @@ async function continueFromHistory(r){
       && ln.split(/\s+/).some(t => norm(t) === w));
     if (li >= 0){ force[li].push(p.w); found++; }
   }
-  if (!found){ toast('Could not match the saved words with the lyrics, sorry.'); return; }
+  if (!found){ toast('Could not match the saved words with the lyrics, sorry.'); return null; }
   const preset = PRESETS[r.preset] ? r.preset : 'medium';
   const tries = (r.scores || []).map((c, i) => ({ n: i + 1, correct: c, hints: 0, last: false }));
-  openSetup(song, { cont: {
+  return { song, found,
     s: { force, preDone: r.correct || 0, preset, mode: r.mode === 'choice' ? 'choice' : 'type',
       opts: { ...PRESETS[preset], skipParens: false, clean: true, instant: true } },
-    restore: { session: r.id, hints: r.hints || 0, played: true, tryNo: tries.length + 1, tries, xpTotal: 0 }
-  } });
-  $('setupBait').textContent = `▶ Continuing your game: ${r.correct || 0}/${r.total} done, ${found} words still to find · try ${tries.length + 1}. Press start.`;
+    restore: { session: r.id, hints: r.hints || 0, played: true, tryNo: tries.length + 1, tries, xpTotal: 0 } };
+}
+// the YouTube audio for a song, picked the same way as on the setup screen
+async function findAudio(song){
+  try {
+    const q = [primaryArtist(song.artist), cleanTitle(song.title)].filter(Boolean).join(' ');
+    const [songs, vids] = await Promise.allSettled([ytSearch(q, 'music_songs'), ytSearch(q, 'videos')]);
+    const seen = new Set();
+    const list = [...(songs.value || []).map(c => ({ ...c, topic: true })), ...(vids.value || [])]
+      .filter(c => !seen.has(c.id) && seen.add(c.id)).map(c => ({ ...c, kind: c.topic ? 'audio' : ytKind(c) }));
+    const want = norm(cleanTitle(song.title));
+    const match = list.filter(c => !want || norm(c.title).includes(want)), pool = match.length ? match : list;
+    const clean = pool.filter(c => c.kind !== 'lyric');
+    return rankFor(clean.length ? clean : pool, 'audio', song.duration, song.title)[0]?.id || '';
+  } catch { return ''; }
+}
+// 👁 See the solution of any saved game (the same screen as after a game: replay the song, see what you missed)
+async function seeSolution(r){
+  toast(`👁 Opening “${r.title}”…`);
+  if (r.run){ const p = await runFromResult(r); if (p) resumeSave({ ...p, review: true }); return; }
+  const g = await gameFromMissed(r);                          // older game: only the missed words were saved
+  if (!g) return;
+  const yt = await findAudio(g.song);
+  const song = g.song;
+  startGame({ src: 'lrclib', id: song.id, title: r.title || song.title, artist: r.artist || song.artist, cover: song.cover || '', duration: song.duration || 0,
+    lines: song.lines, times: song.times, seed: newSeed(), yt, music: yt ? 'audio' : 'off', offset: 0, ...g.s }, { ...g.restore, review: true });
 }
 
 // =====================================================================
@@ -1403,27 +1433,10 @@ async function runFromResult(r){
   }
   return p;
 }
-async function reviewGame(r){
-  toast(`👁 Opening “${r.title}”…`);
-  const p = await runFromResult(r);
-  if (p) resumeSave({ ...p, review: true });
-}
 async function continueRun(r){
   toast(`▶ Loading “${r.title}”…`);
   const p = await runFromResult(r);
   if (p) resumeSave(p);
-}
-// older games (saved before full records): list the words you missed, in their line
-function missedWords(r){
-  const pairs = r.missedPairs || [];
-  const esc = w => w.replace(/[.*+?^${}()|[\]\\]/g, m => '\\' + m);
-  const line = p => { const parts = p.l.split(new RegExp(`(\\b${esc(p.w)}\\b)`, 'i'));
-    return h('li', null, ...parts.map((x, i) => i % 2 ? h('b', { class: 'mw-word', text: x }) : x)); };
-  openModal(
-    h('h2', { text: `👁 What you missed · ${r.title}` }),
-    h('p', { class: 'muted', text: `${r.total - r.correct} words missed${pairs.length < r.total - r.correct ? ` (the first ${pairs.length} were saved)` : ''}. This game was saved before full records, so what you typed isn't known.` }),
-    h('ol', { class: 'mw-list' }, pairs.map(line)),
-    h('div', { class: 'btns' }, h('button', { class: 'btn primary', text: 'OK', onclick: () => closeModal() })));
 }
 function boardKey(s){
   if (s.src !== 'lrclib' || s.preset === 'custom') return null;
@@ -1606,7 +1619,9 @@ function refreshSolution(){
     g.sol.className = 'sol ' + (ok ? 'ok' : 'miss') + (wrote ? ' wrote' : '');
     g.sol.title = ok ? `Found in try ${g.lockTry}` : (attempt ? `You wrote: ${attempt}` : 'Left empty');
     // missed: your answer crossed out on top, the real word under it ("six" → "ten")
-    g.sol.replaceChildren(...(wrote ? [h('s', { class: 'sol-you', text: attempt }), h('span', { text: g.answer })] : [g.answer]));
+    // (a CSS label floating above the word: selecting a line for the translator only picks up the real lyrics)
+    if (wrote) g.sol.dataset.you = attempt; else delete g.sol.dataset.you;
+    g.sol.replaceChildren(g.answer);
   });
 }
 function showTab(name){
@@ -1987,7 +2002,7 @@ async function translateSel(text, force){
   const word = /^[A-Za-z']+$/.test(text) ? text.toLowerCase().replace(/^'+|'+$/g, '') : '';
   const out = h('div', { class: 'tr-out', text: 'Translating…' });
   const dict = word ? h('div', { class: 'tr-dict', text: 'Looking up the meaning…' }) : null;
-  $('trBody').replaceChildren(h('div', { class: 'tr-src', text: text }), out, dict);
+  $('trBody').replaceChildren(...[h('div', { class: 'tr-src', text: text }), out, dict].filter(Boolean));   // (no dictionary box for a whole line)
   const key = lang + '|' + text;
   try {
     let res = trCache.get(key);
@@ -2326,7 +2341,7 @@ function unfinishedCard(){
 }
 function renderStats(){
   const body = $('statsBody');
-  if (!signedIn()){ body.replaceChildren(...[unfinishedCard(), wall('📈', 'Track your progress', 'Sign in to earn XP, keep a daily streak, see your accuracy over time and practise the words you miss most.')].filter(Boolean)); return; }
+  if (!signedIn()){ body.replaceChildren(...[unfinishedCard(), wall('📈', 'Track your progress', 'Sign in to earn XP, keep a daily streak, see your accuracy over time and open the solution of every game you played.')].filter(Boolean)); return; }
   const p = cloud.state.profile || { xp: 0 };
   const results = cloud.state.results;
   const unf = unfinishedCard();
@@ -2337,11 +2352,6 @@ function renderStats(){
   const withTries = results.filter(r => r.tries);
   const avgTries = withTries.length ? (withTries.reduce((a, r) => a + r.tries, 0) / withTries.length).toFixed(1) : '–';
   const totalHints = results.reduce((a, r) => a + (r.hints || 0), 0);
-
-  // most-missed words
-  const counts = new Map();
-  results.forEach(r => (r.missed || []).forEach(w => { const k = w.toLowerCase(); counts.set(k, (counts.get(k) || 0) + 1); }));
-  const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 24);
 
   body.replaceChildren(...[
     unf,
@@ -2357,12 +2367,7 @@ function renderStats(){
       kpi(String(perfects), 'perfect games'),
       kpi(String(avgTries), 'tries per game'),
       kpi('💡 ' + totalHints, 'hints used')),
-    h('div', { class: 'stats-grid' },
-      h('div', { class: 'card chart' }, h('h3', { text: 'Score, last 20 games' }), results.length ? chart(results.slice(0, 20).reverse()) : h('p', { class: 'muted', text: 'Play a song to see your chart.' })),
-      h('div', { class: 'card' },
-        h('h3', { text: 'Words you miss most' }),
-        top.length ? h('div', { class: 'words' }, top.map(([w, n]) => h('span', { class: 'word' }, w, n > 1 ? h('small', { text: '×' + n }) : null)))
-                   : h('p', { class: 'muted', text: 'No mistakes yet. Impressive!' }))),
+    h('div', { class: 'card chart' }, h('h3', { text: 'Score, last 20 games' }), results.length ? chart(results.slice(0, 20).reverse()) : h('p', { class: 'muted', text: 'Play a song to see your chart.' })),
     h('div', { class: 'card', style: 'margin-top:12px' },
       h('div', { class: 'card-head' },
         h('h3', { text: 'Your last games' }),
@@ -2397,8 +2402,7 @@ function gameRow(r){
       h('span', { class: 'badge', text: `💡 ${r.hints || 0}` }),
       r.tries && r.finished === false ? h('span', { class: 'badge', text: 'UNFINISHED' }) : null,
       r.finished === false && !r.multi ? unfinishedBtn(r) : null,
-      r.finished !== false && !r.multi ? (r.run ? h('button', { class: 'btn small', text: '👁 Review', title: 'See this game again: your answers and what you missed', onclick: () => reviewGame(r) })
-        : r.missedPairs?.length ? h('button', { class: 'btn small', text: '👁 Missed words', onclick: () => missedWords(r) }) : null) : null,
+      r.finished !== false && !r.multi && (r.run || r.missedPairs?.length) ? solutionBtn(r) : null,
       h('span', { class: 'd', text: timeAgo(toDate(r.updatedAt)) })));
 }
 // an unfinished game in your history: continue it if it's the one saved on this device, otherwise close it
@@ -2409,8 +2413,9 @@ function unfinishedBtn(r){
     : r.run ? () => continueRun(r)                                  // the full record in your history (exact)
     : r.songId && r.missedPairs?.length ? () => continueFromHistory(r) : null;   // older games: rebuilt from the missed words
   return [go ? h('button', { class: 'btn small primary', text: '▶ Continue', onclick: go }) : null,
-    !r.run && r.missedPairs?.length ? h('button', { class: 'btn small', text: '👁 Missed words', onclick: () => missedWords(r) }) : null, finishBtn(r)];
+    r.run || r.missedPairs?.length ? solutionBtn(r) : null, finishBtn(r)];
 }
+const solutionBtn = r => h('button', { class: 'btn small', text: '👁 See the solution', title: 'Replay the song and see what you missed', onclick: () => seeSolution(r) });
 function finishBtn(r){
   return h('button', { class: 'btn small', text: '🏁 Finish', title: 'Close this game with the score it has', onclick: () =>
     askConfirm('Finish this game?', `“${r.title}” is closed with ${r.correct}/${r.total} (${r.pct}%).`, '🏁 Finish', () => {
